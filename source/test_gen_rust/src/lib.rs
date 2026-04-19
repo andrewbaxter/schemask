@@ -1,0 +1,146 @@
+include!(concat!(env!("OUT_DIR"), "/generated.rs"));
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::*,
+        schemask::{
+            Maskoid,
+            Schemask,
+        },
+        std::collections::HashMap,
+    };
+
+    fn schema() -> Schemask {
+        // Mirror of the schema in build.rs.
+        let mut bindings = HashMap::new();
+        bindings.insert("Label".to_string(), Maskoid::String);
+        bindings.insert("Active".to_string(), Maskoid::Bool);
+        bindings.insert("Count".to_string(), Maskoid::Int);
+        bindings.insert("Ratio".to_string(), Maskoid::Float);
+        bindings.insert("Tags".to_string(), Maskoid::List(Box::new(Maskoid::String)));
+        bindings.insert(
+            "Coords".to_string(),
+            Maskoid::Tuple(vec![Maskoid::Float, Maskoid::Float]),
+        );
+        bindings.insert(
+            "Meta".to_string(),
+            Maskoid::StringMap(Box::new(Maskoid::String)),
+        );
+        bindings.insert("Name".to_string(), Maskoid::Ref("Label".to_string()));
+        bindings.insert(
+            "Player".to_string(),
+            Maskoid::Record({
+                let mut f = HashMap::new();
+                f.insert("name".to_string(), Maskoid::Ref("Label".to_string()));
+                f.insert(
+                    "score".to_string(),
+                    Maskoid::Option(Box::new(Maskoid::Int)),
+                );
+                f.insert("tags".to_string(), Maskoid::Ref("Tags".to_string()));
+                f
+            }),
+        );
+        bindings.insert(
+            "Event".to_string(),
+            Maskoid::TaggedUnion({
+                let mut v = HashMap::new();
+                v.insert("Join".to_string(), Maskoid::Ref("Player".to_string()));
+                v.insert("Leave".to_string(), Maskoid::Ref("Label".to_string()));
+                v
+            }),
+        );
+        Schemask {
+            bindings,
+            default: Some("Player".to_string()),
+        }
+    }
+
+    fn check(root: &str, value: &impl serde::Serialize) {
+        let json = serde_json::to_value(value).unwrap();
+        schemask::r#match(&schema(), Some(root.to_string()), &json).unwrap();
+    }
+
+    #[test]
+    fn test_label() {
+        check("Label", &"hello".to_string());
+    }
+
+    #[test]
+    fn test_active() {
+        check("Active", &true);
+    }
+
+    #[test]
+    fn test_count() {
+        check("Count", &42i64);
+    }
+
+    #[test]
+    fn test_ratio() {
+        check("Ratio", &3.14f64);
+    }
+
+    #[test]
+    fn test_name_ref() {
+        check("Name", &"Alice".to_string());
+    }
+
+    #[test]
+    fn test_tags() {
+        check("Tags", &vec!["alpha".to_string(), "beta".to_string()]);
+    }
+
+    #[test]
+    fn test_coords() {
+        check("Coords", &(1.0f64, 2.5f64));
+    }
+
+    #[test]
+    fn test_meta() {
+        let mut m = HashMap::new();
+        m.insert("env".to_string(), "prod".to_string());
+        check("Meta", &m);
+    }
+
+    #[test]
+    fn test_player_no_score() {
+        check(
+            "Player",
+            &Player {
+                name: "Alice".to_string(),
+                score: None,
+                tags: vec![],
+            },
+        );
+    }
+
+    #[test]
+    fn test_player_with_score() {
+        check(
+            "Player",
+            &Player {
+                name: "Alice".to_string(),
+                score: Some(99),
+                tags: vec!["chess".to_string()],
+            },
+        );
+    }
+
+    #[test]
+    fn test_event_join() {
+        check(
+            "Event",
+            &Event::Join(Player {
+                name: "Bob".to_string(),
+                score: Some(10),
+                tags: vec![],
+            }),
+        );
+    }
+
+    #[test]
+    fn test_event_leave() {
+        check("Event", &Event::Leave("Bob".to_string()));
+    }
+}

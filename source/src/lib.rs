@@ -1,3 +1,6 @@
+pub mod gen_rust;
+pub use gen_rust::generate_rust;
+
 use {
     serde::{
         Deserialize,

@@ -611,7 +611,10 @@ version = "0.1.0"
 dependencies = [
  "aargvark",
  "flowcontrol",
+ "genemichaels-lib",
  "loga",
+ "proc-macro2",
+ "quote",
  "serde",
  "serde_json",
 ]
@@ -740,6 +743,15 @@ checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "test_gen_rust"
+version = "0.1.0"
+dependencies = [
+ "schemask",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
