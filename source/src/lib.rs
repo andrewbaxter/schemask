@@ -1,5 +1,7 @@
 pub mod gen_rust;
 pub use gen_rust::generate_rust;
+pub mod gen_typescript;
+pub use gen_typescript::generate_typescript;
 
 use {
     serde::{

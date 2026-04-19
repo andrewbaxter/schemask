@@ -755,6 +755,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_gen_typescript"
+version = "0.1.0"
+dependencies = [
+ "schemask",
+]
+
+[[package]]
 name = "textwrap"
 version = "0.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

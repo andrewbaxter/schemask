@@ -1,5 +1,5 @@
 [workspace]
-members = ["test_gen_rust"]
+members = ["test_gen_rust", "test_gen_typescript"]
 
 [package]
 name = "schemask"
