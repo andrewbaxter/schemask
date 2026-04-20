@@ -5,6 +5,10 @@ pub use gen_rust::generate_rust;
 pub mod gen_typescript;
 
 pub use gen_typescript::generate_typescript;
+
+pub mod gen_markdown;
+
+pub use gen_markdown::generate_markdown;
 pub use schemask_derive::Maskoidy;
 use {
     serde::{
@@ -81,6 +85,8 @@ pub enum Maskoid {
     Int,
     /// Match any float.
     Float,
+    /// Match any value without validation.
+    Any,
     /// Match the maskoid in the root `bindings` map with this name.
     Ref(String),
     /// The value may match the maskoid or it may be null. In a record, the associated
@@ -128,6 +134,10 @@ impl Maskoid {
 
     pub fn float() -> Self {
         Maskoid::Float
+    }
+
+    pub fn any() -> Self {
+        Maskoid::Any
     }
 
     pub fn ref_(name: impl Into<String>) -> Self {
@@ -368,6 +378,7 @@ fn match_maskoid(
                 });
             }
         },
+        Maskoid::Any => { },
         Maskoid::Ref(name) => {
             match schema.bindings.get(name) {
                 Some(inner) => {
@@ -948,5 +959,11 @@ impl<T: Maskoidy> Maskoidy for Box<T> {
 impl<V: Maskoidy> Maskoidy for HashMap<String, V> {
     fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut HashMap<String, Maskoid>) -> Maskoid {
         return Maskoid::string_map(V::maskoid(seen, bindings));
+    }
+}
+
+impl Maskoidy for serde_json::Value {
+    fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut HashMap<String, Maskoid>) -> Maskoid {
+        return Maskoid::any();
     }
 }

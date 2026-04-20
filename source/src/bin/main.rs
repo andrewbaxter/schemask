@@ -7,8 +7,8 @@ use {
     flowcontrol::ta_return,
     loga::fatal,
     schemask::{
-        Schemask,
         Maskoidy,
+        Schemask,
     },
 };
 
@@ -34,6 +34,11 @@ pub struct CommandGenerateTypescript {
 }
 
 #[derive(Aargvark)]
+pub struct CommandGenerateMarkdown {
+    schema: AargvarkJson<Schemask>,
+}
+
+#[derive(Aargvark)]
 #[vark(break_help)]
 pub enum Command {
     /// Validate a json file matches a schemask.
@@ -43,6 +48,8 @@ pub enum Command {
     /// Generate typescript definitions that match a schemask. Outputs the definitions
     /// to stdout.
     GenerateTypescript(CommandGenerateTypescript),
+    /// Generate markdown documentation for a schemask. Outputs the markdown to stdout.
+    GenerateMarkdown(CommandGenerateMarkdown),
     /// Dump the schemask schema for schemask itself. Outputs the
     SchemaskSchema,
 }
@@ -67,6 +74,9 @@ fn main() {
             },
             Command::GenerateTypescript(c) => {
                 print!("{}", schemask::generate_typescript(&c.schema.value));
+            },
+            Command::GenerateMarkdown(c) => {
+                print!("{}", schemask::generate_markdown(&c.schema.value));
             },
             Command::SchemaskSchema => {
                 println!(

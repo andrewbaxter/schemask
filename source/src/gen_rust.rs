@@ -60,6 +60,9 @@ impl CodeGen {
             Maskoid::Float => quote!{
                 f64
             },
+            Maskoid::Any => quote!{
+                ::serde_json::Value
+            },
             Maskoid::Ref(name) => {
                 let ident = format_ident!("{}", name);
                 quote!{

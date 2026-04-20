@@ -17,6 +17,7 @@ fn ts_type(maskoid: &Maskoid) -> String {
         },
         Maskoid::Bool => "boolean".to_string(),
         Maskoid::Int | Maskoid::Float => "number".to_string(),
+        Maskoid::Any => "unknown".to_string(),
         Maskoid::Ref(name) => name.clone(),
         Maskoid::Option(inner) => {
             if matches!(inner.as_ref(), Maskoid::Option(_)) {
