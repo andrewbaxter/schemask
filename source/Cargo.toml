@@ -11,7 +11,7 @@ readme = "../readme.md"
 description = "Simple but powerful data schemas"
 
 [dependencies]
-schemask_derive = { path = "schemask_derive" }
+schemask_derive = { version = "0.1.1", path = "schemask_derive" }
 aargvark = { version = "0.9", features = ["serde_json"] }
 flowcontrol = "0.2"
 genemichaels-lib = "0.8"
