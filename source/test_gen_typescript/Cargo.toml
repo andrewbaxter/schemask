@@ -5,3 +5,6 @@ edition = "2024"
 
 [build-dependencies]
 schemask = { path = ".." }
+
+[lints.clippy]
+all = "allow"

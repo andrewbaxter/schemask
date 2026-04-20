@@ -53,7 +53,7 @@ mod tests {
 
     fn check(root: &str, value: &impl serde::Serialize) {
         let json = serde_json::to_value(value).unwrap();
-        schemask::r#match(&schema(), Some(root.to_string()), &json).unwrap();
+        schemask::validate(&schema(), Some(root.to_string()), &json).unwrap();
     }
 
     #[test]
