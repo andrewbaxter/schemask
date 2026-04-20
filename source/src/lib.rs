@@ -2,6 +2,7 @@ pub mod gen_rust;
 pub use gen_rust::generate_rust;
 pub mod gen_typescript;
 pub use gen_typescript::generate_typescript;
+pub use schemask_derive::Schematize;
 
 use {
     serde::{
@@ -14,6 +15,80 @@ use {
     },
 };
 
+// ── Maskoid variant structs ───────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct MaskoidConstString {
+    pub value: String,
+}
+
+/// References a named binding in the schema.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct MaskoidRef {
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct MaskoidOption {
+    pub inner: Box<Maskoid>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct MaskoidSet {
+    pub inner: Box<Maskoid>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct MaskoidList {
+    pub inner: Box<Maskoid>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct MaskoidStringMap {
+    pub inner: Box<Maskoid>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct MaskoidTuple {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub description: Option<String>,
+    pub elements: Vec<MaskoidField>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct MaskoidField {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub description: Option<String>,
+    pub maskoid: Maskoid,
+}
+
+impl MaskoidField {
+    pub fn new(maskoid: Maskoid) -> Self {
+        MaskoidField { description: None, maskoid }
+    }
+
+    pub fn with_description(mut self, desc: impl Into<String>) -> Self {
+        self.description = Some(desc.into());
+        self
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct MaskoidTaggedUnion {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub description: Option<String>,
+    pub variants: HashMap<String, MaskoidField>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct MaskoidRecord {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub description: Option<String>,
+    pub fields: HashMap<String, MaskoidField>,
+}
+
+// ── Maskoid enum ─────────────────────────────────────────────────────────────
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum Maskoid {
     /// Match null.
@@ -21,37 +96,118 @@ pub enum Maskoid {
     /// Match any string.
     String,
     /// Must be exactly this string.
-    ConstString(String),
+    ConstString(MaskoidConstString),
     /// Match any bool.
     Bool,
-    /// Match any int.
+    /// Match any integer.
     Int,
     /// Match any float.
     Float,
     /// Match the maskoid in the root `bindings` map with this name.
-    Ref(String),
+    Ref(MaskoidRef),
     /// The value may match the maskoid or it may be null. In a record, the associated
     /// key may also be missing. If options are nested, the inner option is treated
     /// like a single element record with the key "element".
-    Option(Box<Maskoid>),
-    /// Homogenous set where every element matches this maskoid. Unordered, no
-    /// duplicates.
-    Set(Box<Maskoid>),
+    Option(MaskoidOption),
+    /// Homogenous set where every element matches this maskoid. Unordered, no duplicates.
+    Set(MaskoidSet),
     /// Homogenous list where every element matches this maskoid. Preserves order.
-    List(Box<Maskoid>),
+    List(MaskoidList),
     /// Homogenous map where keys are strings and every value matches this maskoid.
-    /// Preserves order.
-    StringMap(Box<Maskoid>),
-    /// Heterogenous list where the entries are matched pairwise with a same-length
-    /// list of maskoids.
-    Tuple(Vec<Maskoid>),
+    StringMap(MaskoidStringMap),
+    /// Heterogenous list where the entries are matched pairwise with a same-length list of maskoids.
+    Tuple(MaskoidTuple),
     /// Matches exactly one maskoid, based on a tag (the key). In json, this is encoded
     /// as a single key object `{KEY: ELEMENT}`.
-    TaggedUnion(HashMap<String, Maskoid>),
+    TaggedUnion(MaskoidTaggedUnion),
     /// Each value is matched against the maskoid with the corresponding key. There's
     /// no match if there are extra elements or missing elements.
-    Record(HashMap<String, Maskoid>),
+    Record(MaskoidRecord),
 }
+
+impl Maskoid {
+    // ── Constructors ─────────────────────────────────────────────────────────
+
+    pub fn null() -> Self {
+        Maskoid::Null
+    }
+
+    pub fn string() -> Self {
+        Maskoid::String
+    }
+
+    pub fn const_string(value: impl Into<String>) -> Self {
+        Maskoid::ConstString(MaskoidConstString { value: value.into() })
+    }
+
+    pub fn bool() -> Self {
+        Maskoid::Bool
+    }
+
+    pub fn int() -> Self {
+        Maskoid::Int
+    }
+
+    pub fn float() -> Self {
+        Maskoid::Float
+    }
+
+    pub fn ref_(name: impl Into<String>) -> Self {
+        Maskoid::Ref(MaskoidRef { name: name.into() })
+    }
+
+    pub fn option(inner: Maskoid) -> Self {
+        Maskoid::Option(MaskoidOption { inner: Box::new(inner) })
+    }
+
+    pub fn set(inner: Maskoid) -> Self {
+        Maskoid::Set(MaskoidSet { inner: Box::new(inner) })
+    }
+
+    pub fn list(inner: Maskoid) -> Self {
+        Maskoid::List(MaskoidList { inner: Box::new(inner) })
+    }
+
+    pub fn string_map(inner: Maskoid) -> Self {
+        Maskoid::StringMap(MaskoidStringMap { inner: Box::new(inner) })
+    }
+
+    pub fn tuple(elements: Vec<MaskoidField>) -> Self {
+        Maskoid::Tuple(MaskoidTuple { description: None, elements: elements })
+    }
+
+    pub fn tagged_union(variants: HashMap<String, MaskoidField>) -> Self {
+        Maskoid::TaggedUnion(MaskoidTaggedUnion { description: None, variants: variants })
+    }
+
+    pub fn record(fields: HashMap<String, MaskoidField>) -> Self {
+        Maskoid::Record(MaskoidRecord { description: None, fields: fields })
+    }
+
+    // ── Description accessor and builder ─────────────────────────────────────
+
+    pub fn description(&self) -> Option<&str> {
+        match self {
+            Maskoid::Tuple(m) => m.description.as_deref(),
+            Maskoid::TaggedUnion(m) => m.description.as_deref(),
+            Maskoid::Record(m) => m.description.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub fn with_description(mut self, desc: impl Into<String>) -> Self {
+        let d = Some(desc.into());
+        match &mut self {
+            Maskoid::Tuple(m) => m.description = d,
+            Maskoid::TaggedUnion(m) => m.description = d,
+            Maskoid::Record(m) => m.description = d,
+            _ => {},
+        }
+        return self;
+    }
+}
+
+// ── Schema ────────────────────────────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Schemask {
@@ -59,6 +215,8 @@ pub struct Schemask {
     /// Which bound element to validate against if none are explicitly specified
     pub default: Option<String>,
 }
+
+// ── Error types ───────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PathSegment {
@@ -111,6 +269,8 @@ impl fmt::Display for Invalid {
 }
 
 impl std::error::Error for Invalid {}
+
+// ── Validation ────────────────────────────────────────────────────────────────
 
 pub fn r#match(schema: &Schemask, root: Option<String>, data: &serde_json::Value) -> Result<(), Invalid> {
     let binding_name = match root.or_else(|| schema.default.clone()) {
@@ -186,19 +346,19 @@ fn match_maskoid(
                 });
             }
         },
-        Maskoid::ConstString(expected) => {
+        Maskoid::ConstString(m) => {
             match data.as_str() {
-                Some(s) if s == expected => {},
+                Some(s) if s == m.value => {},
                 Some(s) => {
                     errors.push(ValidationError {
                         path: path.clone(),
-                        message: format!("Expected string {:?}, got {:?}", expected, s),
+                        message: format!("Expected string {:?}, got {:?}", m.value, s),
                     });
                 },
                 None => {
                     errors.push(ValidationError {
                         path: path.clone(),
-                        message: format!("Expected string {:?}, got {}", expected, type_name(data)),
+                        message: format!("Expected string {:?}, got {}", m.value, type_name(data)),
                     });
                 },
             }
@@ -227,27 +387,27 @@ fn match_maskoid(
                 });
             }
         },
-        Maskoid::Ref(name) => {
-            match schema.bindings.get(name) {
+        Maskoid::Ref(m) => {
+            match schema.bindings.get(&m.name) {
                 Some(inner) => {
                     match_maskoid(schema, inner, data, path, errors);
                 },
                 None => {
                     errors.push(ValidationError {
                         path: path.clone(),
-                        message: format!("Ref to undefined binding '{}'", name),
+                        message: format!("Ref to undefined binding '{}'", m.name),
                     });
                 },
             }
         },
-        Maskoid::Option(inner) => {
+        Maskoid::Option(m) => {
             if !data.is_null() {
                 // Nested options are encoded as {"element": ...} per spec
-                if matches!(inner.as_ref(), Maskoid::Option(_)) {
+                if matches!(m.inner.as_ref(), Maskoid::Option(_)) {
                     match data.as_object() {
                         Some(obj) if obj.len() == 1 && obj.contains_key("element") => {
                             path.push(PathSegment::Key("element".to_string()));
-                            match_maskoid(schema, inner, obj.get("element").unwrap(), path, errors);
+                            match_maskoid(schema, &m.inner, obj.get("element").unwrap(), path, errors);
                             path.pop();
                         },
                         Some(obj) => {
@@ -270,16 +430,16 @@ fn match_maskoid(
                         },
                     }
                 } else {
-                    match_maskoid(schema, inner, data, path, errors);
+                    match_maskoid(schema, &m.inner, data, path, errors);
                 }
             }
         },
-        Maskoid::Set(inner) => {
+        Maskoid::Set(m) => {
             match data.as_array() {
                 Some(arr) => {
                     for (i, elem) in arr.iter().enumerate() {
                         path.push(PathSegment::Index(i));
-                        match_maskoid(schema, inner, elem, path, errors);
+                        match_maskoid(schema, &m.inner, elem, path, errors);
                         path.pop();
                     }
                     for i in 0..arr.len() {
@@ -303,12 +463,12 @@ fn match_maskoid(
                 },
             }
         },
-        Maskoid::List(inner) => {
+        Maskoid::List(m) => {
             match data.as_array() {
                 Some(arr) => {
                     for (i, elem) in arr.iter().enumerate() {
                         path.push(PathSegment::Index(i));
-                        match_maskoid(schema, inner, elem, path, errors);
+                        match_maskoid(schema, &m.inner, elem, path, errors);
                         path.pop();
                     }
                 },
@@ -320,12 +480,12 @@ fn match_maskoid(
                 },
             }
         },
-        Maskoid::StringMap(inner) => {
+        Maskoid::StringMap(m) => {
             match data.as_object() {
                 Some(obj) => {
                     for (k, v) in obj {
                         path.push(PathSegment::Key(k.clone()));
-                        match_maskoid(schema, inner, v, path, errors);
+                        match_maskoid(schema, &m.inner, v, path, errors);
                         path.pop();
                     }
                 },
@@ -337,22 +497,22 @@ fn match_maskoid(
                 },
             }
         },
-        Maskoid::Tuple(maskoids) => {
+        Maskoid::Tuple(m) => {
             match data.as_array() {
                 Some(arr) => {
-                    if arr.len() != maskoids.len() {
+                    if arr.len() != m.elements.len() {
                         errors.push(ValidationError {
                             path: path.clone(),
                             message: format!(
                                 "Expected tuple of length {}, got length {}",
-                                maskoids.len(),
+                                m.elements.len(),
                                 arr.len()
                             ),
                         });
                     } else {
-                        for (i, (elem, inner)) in arr.iter().zip(maskoids.iter()).enumerate() {
+                        for (i, (elem, field)) in arr.iter().zip(m.elements.iter()).enumerate() {
                             path.push(PathSegment::Index(i));
-                            match_maskoid(schema, inner, elem, path, errors);
+                            match_maskoid(schema, &field.maskoid, elem, path, errors);
                             path.pop();
                         }
                     }
@@ -365,18 +525,18 @@ fn match_maskoid(
                 },
             }
         },
-        Maskoid::TaggedUnion(variants) => {
+        Maskoid::TaggedUnion(m) => {
             match data.as_object() {
                 Some(obj) if obj.len() == 1 => {
                     let (tag, value) = obj.iter().next().unwrap();
-                    match variants.get(tag) {
-                        Some(inner) => {
+                    match m.variants.get(tag) {
+                        Some(variant) => {
                             path.push(PathSegment::Key(tag.clone()));
-                            match_maskoid(schema, inner, value, path, errors);
+                            match_maskoid(schema, &variant.maskoid, value, path, errors);
                             path.pop();
                         },
                         None => {
-                            let known: Vec<_> = variants.keys().cloned().collect();
+                            let known: Vec<_> = m.variants.keys().cloned().collect();
                             errors.push(ValidationError {
                                 path: path.clone(),
                                 message: format!(
@@ -408,19 +568,19 @@ fn match_maskoid(
                 },
             }
         },
-        Maskoid::Record(fields) => {
+        Maskoid::Record(m) => {
             match data.as_object() {
                 Some(obj) => {
-                    for (field_name, field_maskoid) in fields {
+                    for (field_name, field) in &m.fields {
                         match obj.get(field_name) {
                             Some(v) => {
                                 path.push(PathSegment::Key(field_name.clone()));
-                                match_maskoid(schema, field_maskoid, v, path, errors);
+                                match_maskoid(schema, &field.maskoid, v, path, errors);
                                 path.pop();
                             },
                             None => {
                                 // Option fields may be absent from a record
-                                if !matches!(field_maskoid, Maskoid::Option(_)) {
+                                if !matches!(field.maskoid, Maskoid::Option(_)) {
                                     errors.push(ValidationError {
                                         path: path.clone(),
                                         message: format!("Missing required field '{}'", field_name),
@@ -430,7 +590,7 @@ fn match_maskoid(
                         }
                     }
                     for key in obj.keys() {
-                        if !fields.contains_key(key) {
+                        if !m.fields.contains_key(key) {
                             errors.push(ValidationError {
                                 path: path.clone(),
                                 message: format!("Unexpected field '{}'", key),
@@ -476,63 +636,63 @@ mod tests {
 
     #[test]
     fn test_null() {
-        pass(Maskoid::Null, json!(null));
-        fail(Maskoid::Null, json!("hello"), &[]);
+        pass(Maskoid::null(), json!(null));
+        fail(Maskoid::null(), json!("hello"), &[]);
     }
 
     #[test]
     fn test_string() {
-        pass(Maskoid::String, json!("hello"));
-        fail(Maskoid::String, json!(42), &[]);
+        pass(Maskoid::string(), json!("hello"));
+        fail(Maskoid::string(), json!(42), &[]);
     }
 
     #[test]
     fn test_const_string() {
-        pass(Maskoid::ConstString("hello".to_string()), json!("hello"));
-        fail(Maskoid::ConstString("hello".to_string()), json!("world"), &[]);
+        pass(Maskoid::const_string("hello"), json!("hello"));
+        fail(Maskoid::const_string("hello"), json!("world"), &[]);
     }
 
     #[test]
     fn test_bool() {
-        pass(Maskoid::Bool, json!(true));
-        fail(Maskoid::Bool, json!(42), &[]);
+        pass(Maskoid::bool(), json!(true));
+        fail(Maskoid::bool(), json!(42), &[]);
     }
 
     #[test]
     fn test_int() {
-        pass(Maskoid::Int, json!(42));
-        fail(Maskoid::Int, json!("hello"), &[]);
+        pass(Maskoid::int(), json!(42));
+        fail(Maskoid::int(), json!("hello"), &[]);
     }
 
     #[test]
     fn test_float() {
-        pass(Maskoid::Float, json!(3.14));
-        fail(Maskoid::Float, json!("hello"), &[]);
+        pass(Maskoid::float(), json!(3.14));
+        fail(Maskoid::float(), json!("hello"), &[]);
     }
 
     #[test]
     fn test_ref() {
         let mut bindings = HashMap::new();
-        bindings.insert("main".to_string(), Maskoid::Ref("other".to_string()));
-        bindings.insert("other".to_string(), Maskoid::String);
+        bindings.insert("main".to_string(), Maskoid::ref_("other"));
+        bindings.insert("other".to_string(), Maskoid::string());
         let s = Schemask { bindings, default: Some("main".to_string()) };
         assert!(r#match(&s, None, &json!("hello")).is_ok());
         let err = r#match(&s, None, &json!(42)).expect_err("expected failure");
         assert_eq!(err.errors.len(), 1);
         assert_eq!(err.errors[0].path, &[] as &[PathSegment]);
-        fail(Maskoid::Ref("nonexistent".to_string()), json!("hello"), &[]);
+        fail(Maskoid::ref_("nonexistent"), json!("hello"), &[]);
     }
 
     #[test]
     fn test_option() {
-        pass(Maskoid::Option(Box::new(Maskoid::String)), json!(null));
-        pass(Maskoid::Option(Box::new(Maskoid::String)), json!("hello"));
-        fail(Maskoid::Option(Box::new(Maskoid::String)), json!(42), &[]);
+        pass(Maskoid::option(Maskoid::string()), json!(null));
+        pass(Maskoid::option(Maskoid::string()), json!("hello"));
+        fail(Maskoid::option(Maskoid::string()), json!(42), &[]);
     }
 
     #[test]
     fn test_option_nested() {
-        let m = Maskoid::Option(Box::new(Maskoid::Option(Box::new(Maskoid::String))));
+        let m = Maskoid::option(Maskoid::option(Maskoid::string()));
         pass(m.clone(), json!(null));
         pass(m.clone(), json!({"element": null}));
         pass(m.clone(), json!({"element": "hello"}));
@@ -545,66 +705,82 @@ mod tests {
     #[test]
     fn test_option_record_absent() {
         let mut fields = HashMap::new();
-        fields.insert("name".to_string(), Maskoid::String);
-        fields.insert("nickname".to_string(), Maskoid::Option(Box::new(Maskoid::String)));
-        pass(Maskoid::Record(fields.clone()), json!({"name": "Alice"}));
-        fail(Maskoid::Record(fields.clone()), json!({"name": "Alice", "nickname": 42}), &[PathSegment::Key("nickname".to_string())]);
+        fields.insert("name".to_string(), MaskoidField::new(Maskoid::string()));
+        fields.insert("nickname".to_string(), MaskoidField::new(Maskoid::option(Maskoid::string())));
+        pass(Maskoid::record(fields.clone()), json!({"name": "Alice"}));
+        fail(
+            Maskoid::record(fields.clone()),
+            json!({"name": "Alice", "nickname": 42}),
+            &[PathSegment::Key("nickname".to_string())],
+        );
     }
 
     #[test]
     fn test_set() {
-        pass(Maskoid::Set(Box::new(Maskoid::Int)), json!([1, 2, 3]));
-        fail(Maskoid::Set(Box::new(Maskoid::Int)), json!([1, "two", 3]), &[PathSegment::Index(1)]);
-        fail(Maskoid::Set(Box::new(Maskoid::Int)), json!([1, 2, 1]), &[PathSegment::Index(2)]);
+        pass(Maskoid::set(Maskoid::int()), json!([1, 2, 3]));
+        fail(Maskoid::set(Maskoid::int()), json!([1, "two", 3]), &[PathSegment::Index(1)]);
+        fail(Maskoid::set(Maskoid::int()), json!([1, 2, 1]), &[PathSegment::Index(2)]);
     }
 
     #[test]
     fn test_list() {
-        pass(Maskoid::List(Box::new(Maskoid::String)), json!(["a", "b", "c"]));
-        fail(Maskoid::List(Box::new(Maskoid::String)), json!(["a", 42, "c"]), &[PathSegment::Index(1)]);
+        pass(Maskoid::list(Maskoid::string()), json!(["a", "b", "c"]));
+        fail(Maskoid::list(Maskoid::string()), json!(["a", 42, "c"]), &[PathSegment::Index(1)]);
     }
 
     #[test]
     fn test_string_map() {
-        pass(Maskoid::StringMap(Box::new(Maskoid::Int)), json!({"a": 1, "b": 2}));
-        fail(Maskoid::StringMap(Box::new(Maskoid::Int)), json!({"a": 1, "b": "two"}), &[PathSegment::Key("b".to_string())]);
+        pass(Maskoid::string_map(Maskoid::int()), json!({"a": 1, "b": 2}));
+        fail(
+            Maskoid::string_map(Maskoid::int()),
+            json!({"a": 1, "b": "two"}),
+            &[PathSegment::Key("b".to_string())],
+        );
     }
 
     #[test]
     fn test_tuple() {
-        pass(Maskoid::Tuple(vec![Maskoid::String, Maskoid::Int]), json!(["hello", 42]));
-        fail(Maskoid::Tuple(vec![Maskoid::String, Maskoid::Int]), json!(["hello", "world"]), &[PathSegment::Index(1)]);
-        fail(Maskoid::Tuple(vec![Maskoid::String, Maskoid::Int]), json!(["hello", 42, "extra"]), &[]);
+        let t = || vec![MaskoidField::new(Maskoid::string()), MaskoidField::new(Maskoid::int())];
+        pass(Maskoid::tuple(t()), json!(["hello", 42]));
+        fail(Maskoid::tuple(t()), json!(["hello", "world"]), &[PathSegment::Index(1)]);
+        fail(Maskoid::tuple(t()), json!(["hello", 42, "extra"]), &[]);
     }
 
     #[test]
     fn test_tagged_union() {
         let mut variants = HashMap::new();
-        variants.insert("name".to_string(), Maskoid::String);
-        variants.insert("age".to_string(), Maskoid::Int);
-        pass(Maskoid::TaggedUnion(variants.clone()), json!({"name": "Alice"}));
-        fail(Maskoid::TaggedUnion(variants.clone()), json!({"name": 42}), &[PathSegment::Key("name".to_string())]);
-        fail(Maskoid::TaggedUnion(variants.clone()), json!({"name": "Alice", "age": 30}), &[]);
-        fail(Maskoid::TaggedUnion(variants.clone()), json!({}), &[]);
-        fail(Maskoid::TaggedUnion(variants.clone()), json!({"unknown": "Alice"}), &[]);
+        variants.insert("name".to_string(), MaskoidField::new(Maskoid::string()));
+        variants.insert("age".to_string(), MaskoidField::new(Maskoid::int()));
+        pass(Maskoid::tagged_union(variants.clone()), json!({"name": "Alice"}));
+        fail(
+            Maskoid::tagged_union(variants.clone()),
+            json!({"name": 42}),
+            &[PathSegment::Key("name".to_string())],
+        );
+        fail(Maskoid::tagged_union(variants.clone()), json!({"name": "Alice", "age": 30}), &[]);
+        fail(Maskoid::tagged_union(variants.clone()), json!({}), &[]);
+        fail(Maskoid::tagged_union(variants.clone()), json!({"unknown": "Alice"}), &[]);
     }
 
     #[test]
     fn test_record() {
         let mut fields = HashMap::new();
-        fields.insert("name".to_string(), Maskoid::String);
-        fields.insert("age".to_string(), Maskoid::Int);
-        pass(Maskoid::Record(fields.clone()), json!({"name": "Alice", "age": 30}));
-        fail(Maskoid::Record(fields.clone()), json!({"name": "Alice"}), &[]);
-        fail(Maskoid::Record(fields.clone()), json!({"name": "Alice", "age": 30, "extra": "oops"}), &[]);
+        fields.insert("name".to_string(), MaskoidField::new(Maskoid::string()));
+        fields.insert("age".to_string(), MaskoidField::new(Maskoid::int()));
+        pass(Maskoid::record(fields.clone()), json!({"name": "Alice", "age": 30}));
+        fail(Maskoid::record(fields.clone()), json!({"name": "Alice"}), &[]);
+        fail(
+            Maskoid::record(fields.clone()),
+            json!({"name": "Alice", "age": 30, "extra": "oops"}),
+            &[],
+        );
     }
 
     #[test]
     fn test_nested_path_index_then_key() {
-        // Error inside a record nested under an array element: path = [1].x
         let mut fields = HashMap::new();
-        fields.insert("x".to_string(), Maskoid::Int);
-        let m = Maskoid::List(Box::new(Maskoid::Record(fields)));
+        fields.insert("x".to_string(), MaskoidField::new(Maskoid::int()));
+        let m = Maskoid::list(Maskoid::record(fields));
         fail(
             m,
             json!([{"x": 1}, {"x": "bad"}]),
@@ -614,10 +790,9 @@ mod tests {
 
     #[test]
     fn test_nested_path_key_then_index() {
-        // Error inside an array nested under a record key: path = .items[2]
         let mut fields = HashMap::new();
-        fields.insert("items".to_string(), Maskoid::List(Box::new(Maskoid::Int)));
-        let m = Maskoid::Record(fields);
+        fields.insert("items".to_string(), MaskoidField::new(Maskoid::list(Maskoid::int())));
+        let m = Maskoid::record(fields);
         fail(
             m,
             json!({"items": [1, 2, "bad"]}),
@@ -632,4 +807,63 @@ mod tests {
         assert_eq!(err.errors.len(), 1);
         assert_eq!(err.errors[0].path, &[] as &[PathSegment]);
     }
+}
+
+// ── Schematize trait ──────────────────────────────────────────────────────────
+
+/// A type that can describe itself as a [`Maskoid`].
+pub trait Schematize {
+    fn maskoid() -> Maskoid;
+}
+
+impl Schematize for () {
+    fn maskoid() -> Maskoid { Maskoid::null() }
+}
+impl Schematize for bool {
+    fn maskoid() -> Maskoid { Maskoid::bool() }
+}
+impl Schematize for String {
+    fn maskoid() -> Maskoid { Maskoid::string() }
+}
+impl Schematize for i8 {
+    fn maskoid() -> Maskoid { Maskoid::int() }
+}
+impl Schematize for i16 {
+    fn maskoid() -> Maskoid { Maskoid::int() }
+}
+impl Schematize for i32 {
+    fn maskoid() -> Maskoid { Maskoid::int() }
+}
+impl Schematize for i64 {
+    fn maskoid() -> Maskoid { Maskoid::int() }
+}
+impl Schematize for u8 {
+    fn maskoid() -> Maskoid { Maskoid::int() }
+}
+impl Schematize for u16 {
+    fn maskoid() -> Maskoid { Maskoid::int() }
+}
+impl Schematize for u32 {
+    fn maskoid() -> Maskoid { Maskoid::int() }
+}
+impl Schematize for u64 {
+    fn maskoid() -> Maskoid { Maskoid::int() }
+}
+impl Schematize for f32 {
+    fn maskoid() -> Maskoid { Maskoid::float() }
+}
+impl Schematize for f64 {
+    fn maskoid() -> Maskoid { Maskoid::float() }
+}
+impl<T: Schematize> Schematize for Option<T> {
+    fn maskoid() -> Maskoid { Maskoid::option(T::maskoid()) }
+}
+impl<T: Schematize> Schematize for Vec<T> {
+    fn maskoid() -> Maskoid { Maskoid::list(T::maskoid()) }
+}
+impl<T: Schematize> Schematize for Box<T> {
+    fn maskoid() -> Maskoid { T::maskoid() }
+}
+impl<V: Schematize> Schematize for HashMap<String, V> {
+    fn maskoid() -> Maskoid { Maskoid::string_map(V::maskoid()) }
 }

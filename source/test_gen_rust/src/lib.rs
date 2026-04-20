@@ -7,6 +7,7 @@ mod tests {
         schemask::{
             Maskoid,
             Schemask,
+            MaskoidField,
         },
         std::collections::HashMap,
     };
@@ -14,39 +15,33 @@ mod tests {
     fn schema() -> Schemask {
         // Mirror of the schema in build.rs.
         let mut bindings = HashMap::new();
-        bindings.insert("Label".to_string(), Maskoid::String);
-        bindings.insert("Active".to_string(), Maskoid::Bool);
-        bindings.insert("Count".to_string(), Maskoid::Int);
-        bindings.insert("Ratio".to_string(), Maskoid::Float);
-        bindings.insert("Tags".to_string(), Maskoid::List(Box::new(Maskoid::String)));
+        bindings.insert("Label".to_string(), Maskoid::string());
+        bindings.insert("Active".to_string(), Maskoid::bool());
+        bindings.insert("Count".to_string(), Maskoid::int());
+        bindings.insert("Ratio".to_string(), Maskoid::float());
+        bindings.insert("Tags".to_string(), Maskoid::list(Maskoid::string()));
         bindings.insert(
             "Coords".to_string(),
-            Maskoid::Tuple(vec![Maskoid::Float, Maskoid::Float]),
+            Maskoid::tuple(vec![MaskoidField::new(Maskoid::float()), MaskoidField::new(Maskoid::float())]),
         );
-        bindings.insert(
-            "Meta".to_string(),
-            Maskoid::StringMap(Box::new(Maskoid::String)),
-        );
-        bindings.insert("Name".to_string(), Maskoid::Ref("Label".to_string()));
+        bindings.insert("Meta".to_string(), Maskoid::string_map(Maskoid::string()));
+        bindings.insert("Name".to_string(), Maskoid::ref_("Label"));
         bindings.insert(
             "Player".to_string(),
-            Maskoid::Record({
+            Maskoid::record({
                 let mut f = HashMap::new();
-                f.insert("name".to_string(), Maskoid::Ref("Label".to_string()));
-                f.insert(
-                    "score".to_string(),
-                    Maskoid::Option(Box::new(Maskoid::Int)),
-                );
-                f.insert("tags".to_string(), Maskoid::Ref("Tags".to_string()));
+                f.insert("name".to_string(), MaskoidField::new(Maskoid::ref_("Label")));
+                f.insert("score".to_string(), MaskoidField::new(Maskoid::option(Maskoid::int())));
+                f.insert("tags".to_string(), MaskoidField::new(Maskoid::ref_("Tags")));
                 f
             }),
         );
         bindings.insert(
             "Event".to_string(),
-            Maskoid::TaggedUnion({
+            Maskoid::tagged_union({
                 let mut v = HashMap::new();
-                v.insert("Join".to_string(), Maskoid::Ref("Player".to_string()));
-                v.insert("Leave".to_string(), Maskoid::Ref("Label".to_string()));
+                v.insert("Join".to_string(), MaskoidField::new(Maskoid::ref_("Player")));
+                v.insert("Leave".to_string(), MaskoidField::new(Maskoid::ref_("Label")));
                 v
             }),
         );

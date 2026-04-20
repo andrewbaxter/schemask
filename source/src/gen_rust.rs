@@ -1,6 +1,7 @@
 use {
     crate::{
         Maskoid,
+        MaskoidField,
         Schemask,
     },
     proc_macro2::TokenStream,
@@ -24,12 +25,18 @@ impl CodeGen {
     /// Records and TaggedUnions become structs/enums; everything else becomes a type alias.
     fn gen_type_def(&mut self, name: &str, maskoid: &Maskoid) -> TokenStream {
         let ident = format_ident!("{}", name);
+        let doc = doc_attr(maskoid.description());
         match maskoid {
-            Maskoid::Record(fields) => self.gen_record(name, fields),
-            Maskoid::TaggedUnion(variants) => self.gen_tagged_union(name, variants),
+            Maskoid::Record(r) => self.gen_record(name, &r.fields, r.description.as_deref()),
+            Maskoid::TaggedUnion(u) => {
+                self.gen_tagged_union(name, &u.variants, u.description.as_deref())
+            },
             other => {
                 let ty = self.gen_type_expr(other, name);
-                quote! { pub type #ident = #ty; }
+                quote! {
+                    #doc
+                    pub type #ident = #ty;
+                }
             },
         }
     }
@@ -44,18 +51,18 @@ impl CodeGen {
             Maskoid::Bool => quote! { bool },
             Maskoid::Int => quote! { i64 },
             Maskoid::Float => quote! { f64 },
-            Maskoid::Ref(r) => {
-                let ident = format_ident!("{}", r);
+            Maskoid::Ref(m) => {
+                let ident = format_ident!("{}", m.name);
                 quote! { #ident }
             },
-            Maskoid::Option(inner) => {
-                if matches!(inner.as_ref(), Maskoid::Option(_)) {
+            Maskoid::Option(m) => {
+                if matches!(m.inner.as_ref(), Maskoid::Option(_)) {
                     // Nested options: the inner option is encoded as {"element": <value>}.
                     // Generate a wrapper struct so Option<Wrapper> correctly serialises to
                     // either null (None) or {"element": ...} (Some(Wrapper { element })).
                     let wrapper_name = format!("{}Wrapper", hint);
                     let wrapper_ident = format_ident!("{}", wrapper_name);
-                    let element_ty = self.gen_type_expr(inner, &format!("{}Inner", hint));
+                    let element_ty = self.gen_type_expr(&m.inner, &format!("{}Inner", hint));
                     self.extra_defs.push(quote! {
                         #[derive(::serde::Serialize, ::serde::Deserialize)]
                         pub struct #wrapper_ident {
@@ -64,35 +71,41 @@ impl CodeGen {
                     });
                     quote! { Option<#wrapper_ident> }
                 } else {
-                    let inner_ty = self.gen_type_expr(inner, hint);
+                    let inner_ty = self.gen_type_expr(&m.inner, hint);
                     quote! { Option<#inner_ty> }
                 }
             },
-            Maskoid::Set(inner) | Maskoid::List(inner) => {
-                let inner_ty = self.gen_type_expr(inner, hint);
+            Maskoid::Set(m) => {
+                let inner_ty = self.gen_type_expr(&m.inner, hint);
                 quote! { Vec<#inner_ty> }
             },
-            Maskoid::StringMap(inner) => {
-                let inner_ty = self.gen_type_expr(inner, hint);
+            Maskoid::List(m) => {
+                let inner_ty = self.gen_type_expr(&m.inner, hint);
+                quote! { Vec<#inner_ty> }
+            },
+            Maskoid::StringMap(m) => {
+                let inner_ty = self.gen_type_expr(&m.inner, hint);
                 quote! { std::collections::HashMap<String, #inner_ty> }
             },
-            Maskoid::Tuple(maskoids) => {
-                let types: Vec<TokenStream> = maskoids
+            Maskoid::Tuple(m) => {
+                let types: Vec<TokenStream> = m
+                    .elements
                     .iter()
                     .enumerate()
-                    .map(|(i, m)| self.gen_type_expr(m, &format!("{}_{}", hint, i)))
+                    .map(|(i, field)| self.gen_type_expr(&field.maskoid, &format!("{}_{}", hint, i)))
                     .collect();
                 // Trailing comma so single-element tuples are unambiguous.
                 quote! { (#(#types,)*) }
             },
-            Maskoid::Record(fields) => {
-                let def = self.gen_record(hint, fields);
+            Maskoid::Record(r) => {
+                let def = self.gen_record(hint, &r.fields, r.description.as_deref());
                 self.extra_defs.push(def);
                 let ident = format_ident!("{}", hint);
                 quote! { #ident }
             },
-            Maskoid::TaggedUnion(variants) => {
-                let def = self.gen_tagged_union(hint, variants);
+            Maskoid::TaggedUnion(u) => {
+                let def =
+                    self.gen_tagged_union(hint, &u.variants, u.description.as_deref());
                 self.extra_defs.push(def);
                 let ident = format_ident!("{}", hint);
                 quote! { #ident }
@@ -100,34 +113,46 @@ impl CodeGen {
         }
     }
 
-    fn gen_record(&mut self, name: &str, fields: &HashMap<String, Maskoid>) -> TokenStream {
+    fn gen_record(
+        &mut self,
+        name: &str,
+        fields: &HashMap<String, MaskoidField>,
+        description: Option<&str>,
+    ) -> TokenStream {
         let ident = format_ident!("{}", name);
+        let doc = doc_attr(description);
         let mut sorted_fields: Vec<_> = fields.iter().collect();
         sorted_fields.sort_by_key(|(k, _)| k.as_str());
         let field_tokens: Vec<TokenStream> = sorted_fields
             .iter()
-            .map(|(fname, fmaskoid)| {
+            .map(|(fname, field)| {
                 let fident = format_ident!("{}", fname);
                 let hint = format!("{}{}", name, to_pascal_case(fname));
-                match fmaskoid {
+                let field_doc = doc_attr(field.description.as_deref());
+                match &field.maskoid {
                     Maskoid::Option(_) => {
                         // Call gen_type_expr on the *full* Option maskoid rather than
                         // its inner, so Option(Option(...)) produces Option<Wrapper>
                         // rather than Option<Option<...>>.
-                        let full_ty = self.gen_type_expr(fmaskoid, &hint);
+                        let full_ty = self.gen_type_expr(&field.maskoid, &hint);
                         quote! {
+                            #field_doc
                             #[serde(skip_serializing_if = "Option::is_none", default)]
                             pub #fident: #full_ty
                         }
                     },
                     other => {
                         let ty = self.gen_type_expr(other, &hint);
-                        quote! { pub #fident: #ty }
+                        quote! {
+                            #field_doc
+                            pub #fident: #ty
+                        }
                     },
                 }
             })
             .collect();
         quote! {
+            #doc
             #[derive(::serde::Serialize, ::serde::Deserialize)]
             pub struct #ident {
                 #(#field_tokens),*
@@ -138,26 +163,41 @@ impl CodeGen {
     fn gen_tagged_union(
         &mut self,
         name: &str,
-        variants: &HashMap<String, Maskoid>,
+        variants: &HashMap<String, MaskoidField>,
+        description: Option<&str>,
     ) -> TokenStream {
         let ident = format_ident!("{}", name);
+        let doc = doc_attr(description);
         let mut sorted_variants: Vec<_> = variants.iter().collect();
         sorted_variants.sort_by_key(|(k, _)| k.as_str());
         let variant_tokens: Vec<TokenStream> = sorted_variants
             .iter()
-            .map(|(vname, vmaskoid)| {
+            .map(|(vname, variant)| {
                 let vident = format_ident!("{}", vname);
                 let hint = format!("{}{}", name, vname);
-                let vty = self.gen_type_expr(vmaskoid, &hint);
-                quote! { #vident(#vty) }
+                let variant_doc = doc_attr(variant.description.as_deref());
+                let vty = self.gen_type_expr(&variant.maskoid, &hint);
+                quote! {
+                    #variant_doc
+                    #vident(#vty)
+                }
             })
             .collect();
         quote! {
+            #doc
             #[derive(::serde::Serialize, ::serde::Deserialize)]
             pub enum #ident {
                 #(#variant_tokens),*
             }
         }
+    }
+}
+
+/// Emit `#[doc = "..."]` for a description, or nothing if None.
+fn doc_attr(desc: Option<&str>) -> TokenStream {
+    match desc {
+        None => quote! {},
+        Some(s) => quote! { #[doc = #s] },
     }
 }
 

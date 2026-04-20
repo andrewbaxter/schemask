@@ -1,5 +1,5 @@
 [workspace]
-members = ["test_gen_rust", "test_gen_typescript"]
+members = ["schemask_derive", "test_gen_rust", "test_gen_typescript"]
 
 [package]
 name = "schemask"
@@ -7,6 +7,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+schemask_derive = { path = "schemask_derive" }
 aargvark = { version = "0.9.6", features = ["serde_json"] }
 flowcontrol = "0.2.3"
 genemichaels-lib = "0.8.6"

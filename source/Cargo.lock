@@ -615,8 +615,18 @@ dependencies = [
  "loga",
  "proc-macro2",
  "quote",
+ "schemask_derive",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "schemask_derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
