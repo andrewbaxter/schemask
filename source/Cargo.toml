@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2024"
 license = "ISC"
 repository = "https://github.com/andrewbaxter/schemask"
-readme = "readme.md"
+readme = "../readme.md"
 description = "Simple but powerful data schemas"
 
 [dependencies]
