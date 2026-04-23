@@ -2,8 +2,8 @@ use {
     crate::{
         Maskoid,
         MaskoidField,
-        Schemask,
     },
+    crate::v1::Schemask,
     proc_macro2::TokenStream,
     quote::{
         format_ident,

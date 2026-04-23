@@ -50,7 +50,7 @@ struct TreeNode {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn schema_for<T: Maskoidy>() -> Schemask {
-    return T::schemask();
+    return T::schemask().to_versioned();
 }
 
 fn valid(schema: &Schemask, data: serde_json::Value) {

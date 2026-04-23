@@ -81,7 +81,8 @@ fn main() {
             Command::SchemaskSchema => {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&Schemask::schemask()).map_err(|e| loga::err(e.to_string()))?
+                    serde_json::to_string_pretty(&schemask::latest::Schemask::schemask().to_versioned())
+                        .map_err(|e| loga::err(e.to_string()))?
                 );
             },
         }

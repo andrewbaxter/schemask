@@ -1,7 +1,6 @@
 use {
     schemask::{
         Maskoid,
-        Schemask,
         MaskoidField,
         generate_typescript,
     },
@@ -18,7 +17,7 @@ fn main() {
     let out = Path::new(&out_dir);
 
     // Write the generated type definitions.
-    fs::write(out.join("types.ts"), generate_typescript(&schema)).unwrap();
+    fs::write(out.join("types.ts"), generate_typescript(&schema.to_versioned())).unwrap();
 
     // ── Valid cases ────────────────────────────────────────────────────────────
 
@@ -130,7 +129,7 @@ const invalid_meta_value_type: Meta = { count: 42 };
 ").unwrap();
 }
 
-fn test_schema() -> Schemask {
+fn test_schema() -> schemask::latest::Schemask {
     let mut bindings = HashMap::new();
     bindings.insert("Label".to_string(), Maskoid::string());
     bindings.insert("Active".to_string(), Maskoid::bool());
@@ -162,7 +161,7 @@ fn test_schema() -> Schemask {
             v
         }),
     );
-    Schemask {
+    schemask::latest::Schemask {
         bindings,
         default: Some("Player".to_string()),
     }

@@ -1,7 +1,6 @@
 use {
     schemask::{
         Maskoid,
-        Schemask,
         MaskoidField,
         generate_rust,
     },
@@ -14,12 +13,12 @@ use {
 
 fn main() {
     let schema = test_schema();
-    let code = generate_rust(&schema);
+    let code = generate_rust(&schema.to_versioned());
     let out_dir = std::env::var("OUT_DIR").unwrap();
     fs::write(Path::new(&out_dir).join("generated.rs"), code).unwrap();
 }
 
-pub fn test_schema() -> Schemask {
+pub fn test_schema() -> schemask::latest::Schemask {
     let mut bindings = HashMap::new();
     // Primitive aliases
     bindings.insert("Label".to_string(), Maskoid::string());
@@ -56,7 +55,7 @@ pub fn test_schema() -> Schemask {
             v
         }),
     );
-    Schemask {
+    schemask::latest::Schemask {
         bindings,
         default: Some("Player".to_string()),
     }

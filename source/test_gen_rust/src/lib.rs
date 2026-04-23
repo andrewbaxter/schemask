@@ -6,13 +6,12 @@ mod tests {
         super::*,
         schemask::{
             Maskoid,
-            Schemask,
             MaskoidField,
         },
         std::collections::HashMap,
     };
 
-    fn schema() -> Schemask {
+    fn schema() -> schemask::latest::Schemask {
         // Mirror of the schema in build.rs.
         let mut bindings = HashMap::new();
         bindings.insert("Label".to_string(), Maskoid::string());
@@ -45,7 +44,7 @@ mod tests {
                 v
             }),
         );
-        Schemask {
+        schemask::latest::Schemask {
             bindings,
             default: Some("Player".to_string()),
         }
@@ -53,7 +52,7 @@ mod tests {
 
     fn check(root: &str, value: &impl serde::Serialize) {
         let json = serde_json::to_value(value).unwrap();
-        schemask::validate(&schema(), Some(root.to_string()), &json).unwrap();
+        schemask::validate(&schema().to_versioned(), Some(root.to_string()), &json).unwrap();
     }
 
     #[test]

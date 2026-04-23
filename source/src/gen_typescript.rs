@@ -2,8 +2,8 @@ use {
     crate::{
         Maskoid,
         MaskoidRecord,
-        Schemask,
     },
+    crate::v1::Schemask,
     serde_json,
 };
 

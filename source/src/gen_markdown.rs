@@ -3,8 +3,8 @@ use {
         Maskoid,
         MaskoidRecord,
         MaskoidTaggedUnion,
-        Schemask,
     },
+    crate::v1::Schemask,
     serde_json,
     std::fmt::Write,
 };
