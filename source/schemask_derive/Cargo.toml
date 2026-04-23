@@ -1,6 +1,6 @@
 [package]
 name = "schemask_derive"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 license = "ISC"
 repository = "https://github.com/andrewbaxter/schemask"
