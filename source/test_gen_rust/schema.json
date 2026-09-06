@@ -1,0 +1,32 @@
+{
+  "v1": {
+    "bindings": {
+      "Label": "string",
+      "Count": "int",
+      "Tags": { "list": "string" },
+      "Account": {
+        "record": {
+          "description": "A user account.",
+          "fields": {
+            "name": { "description": "Login name.", "maskoid": { "ref": "Label" } },
+            "type": { "maskoid": "string" },
+            "displayName": { "maskoid": { "option": "string" } },
+            "avatar-url": { "maskoid": { "option": "string" } },
+            "score": { "maskoid": { "option": "int" } },
+            "tags": { "maskoid": { "ref": "Tags" } }
+          }
+        }
+      },
+      "Event": {
+        "tagged_union": {
+          "variants": {
+            "Join": { "maskoid": { "ref": "Account" } },
+            "Leave": { "maskoid": { "ref": "Label" } },
+            "user_left": { "maskoid": { "ref": "Label" } }
+          }
+        }
+      }
+    },
+    "default": "Account"
+  }
+}

@@ -3,8 +3,16 @@ use {
         Maskoid,
         MaskoidField,
     },
-    crate::v1::Schemask,
-    proc_macro2::TokenStream,
+    crate::v1::SchemaskV1,
+    heck::{
+        ToSnakeCase,
+        ToUpperCamelCase,
+    },
+    proc_macro2::{
+        Ident,
+        Span,
+        TokenStream,
+    },
     quote::{
         format_ident,
         quote,
@@ -12,39 +20,40 @@ use {
     std::collections::HashMap,
 };
 
+fn to_ident(cased: &str) -> Ident {
+    if cased.is_empty() {
+        return Ident::new("_field", Span::call_site());
+    }
+    if syn::parse_str::<Ident>(cased).is_ok() {
+        return Ident::new(cased, Span::call_site());
+    }
+    if syn::parse_str::<Ident>(&format!("r#{}", cased)).is_ok() {
+        return Ident::new_raw(cased, Span::call_site());
+    }
+    return Ident::new(&format!("_{}", cased), Span::call_site());
+}
+
+fn rename_attr(key: &str, ident: &Ident) -> TokenStream {
+    let name = ident.to_string();
+    if name.strip_prefix("r#").unwrap_or(&name) == key {
+        return quote!{
+        };
+    }
+    return quote!{
+        #[serde(rename = #key)]
+    };
+}
+
 struct CodeGen {
     extra_defs: Vec<TokenStream>,
 }
 
 impl CodeGen {
-    fn new() -> Self {
-        Self { extra_defs: vec![] }
-    }
-
-    /// Generates a top-level named type definition for a binding. Records and
-    /// TaggedUnions become structs/enums; everything else becomes a type alias.
-    fn gen_type_def(&mut self, name: &str, maskoid: &Maskoid) -> TokenStream {
-        let ident = format_ident!("{}", name);
-        let doc = generate_docattr(maskoid.description());
-        match maskoid {
-            Maskoid::Record(r) => self.gen_record(name, &r.fields, r.description.as_deref()),
-            Maskoid::TaggedUnion(u) => {
-                self.gen_tagged_union(name, &u.variants, u.description.as_deref())
-            },
-            other => {
-                let ty = self.gen_type_expr(other, name);
-                quote!{
-                    #doc pub type #ident = #ty;
-                }
-            },
-        }
-    }
-
     /// Returns a Rust type expression for the given maskoid. For Record and
     /// TaggedUnion, a helper type named after `hint` is added to extra_defs. For
     /// nested Option(Option(...)), a wrapper struct is added to extra_defs.
     fn gen_type_expr(&mut self, maskoid: &Maskoid, hint: &str) -> TokenStream {
-        match maskoid {
+        return match maskoid {
             Maskoid::Null => quote!{
                 ()
             },
@@ -141,7 +150,7 @@ impl CodeGen {
                     #ident
                 }
             },
-        }
+        };
     }
 
     fn gen_record(
@@ -168,10 +177,11 @@ impl CodeGen {
                         result.push(c);
                     }
                 }
-                result
+                return result;
             }
 
-            let fident = format_ident!("{}", fname);
+            let fident = to_ident(&fname.to_snake_case());
+            let frename = rename_attr(fname, &fident);
             let hint = format!("{}{}", name, to_pascal_case(fname));
             let field_doc = generate_docattr(field.description.as_deref());
             match &field.maskoid {
@@ -180,19 +190,21 @@ impl CodeGen {
                     // Option(Option(...)) produces Option`<Wrapper>` rather than Option<Option<...>>.
                     let full_ty = self.gen_type_expr(&field.maskoid, &hint);
                     quote!{
-                        #field_doc #[serde(skip_serializing_if = "Option::is_none", default)] pub #fident: #full_ty
+                        #field_doc #frename #[
+                            serde(skip_serializing_if = "Option::is_none", default)
+                        ] pub #fident: #full_ty
                     }
                 },
                 other => {
                     let ty = self.gen_type_expr(other, &hint);
                     quote!{
-                        #field_doc pub #fident: #ty
+                        #field_doc #frename pub #fident: #ty
                     }
                 },
             }
         }).collect();
         quote!{
-            #doc #[derive(::serde::Serialize, ::serde::Deserialize)] pub struct #ident {
+            #doc #[derive(::serde::Serialize, ::serde::Deserialize)] #[serde(deny_unknown_fields)] pub struct #ident {
                 #(#field_tokens),
                 *
             }
@@ -210,12 +222,17 @@ impl CodeGen {
         let mut sorted_variants: Vec<_> = variants.iter().collect();
         sorted_variants.sort_by_key(|(k, _)| k.as_str());
         let variant_tokens: Vec<TokenStream> = sorted_variants.iter().map(|(vname, variant)| {
-            let vident = format_ident!("{}", vname);
-            let hint = format!("{}{}", name, vname);
+            let vident = to_ident(&vname.to_upper_camel_case());
+            let vrename = rename_attr(vname, &vident);
             let variant_doc = generate_docattr(variant.description.as_deref());
-            let vty = self.gen_type_expr(&variant.maskoid, &hint);
+            if matches!(variant.maskoid, Maskoid::Null) {
+                return quote!{
+                    #variant_doc #vrename #vident
+                };
+            }
+            let vty = self.gen_type_expr(&variant.maskoid, &format!("{}{}", name, vname));
             quote!{
-                #variant_doc #vident(#vty)
+                #variant_doc #vrename #vident(#vty)
             }
         }).collect();
         quote!{
@@ -228,29 +245,44 @@ impl CodeGen {
 }
 
 fn generate_docattr(desc: Option<&str>) -> TokenStream {
-    match desc {
+    return match desc {
         None => quote!{
         },
         Some(s) => quote!{
             #[doc = #s]
         },
-    }
+    };
+}
+
+pub fn generate_rust_tokens(schema: &SchemaskV1) -> TokenStream {
+    let mut codegen = CodeGen { extra_defs: vec![] };
+    let mut sorted_bindings: Vec<_> = schema.bindings.iter().collect();
+    sorted_bindings.sort_by_key(|(k, _)| k.as_str());
+    let binding_defs: Vec<TokenStream> = sorted_bindings.iter().map(|(name, maskoid)| {
+        let name = name.as_str();
+        let ident = format_ident!("{}", name);
+        let doc = generate_docattr(maskoid.description());
+        return match maskoid {
+            Maskoid::Record(r) => codegen.gen_record(name, &r.fields, r.description.as_deref()),
+            Maskoid::TaggedUnion(u) => codegen.gen_tagged_union(name, &u.variants, u.description.as_deref()),
+            other => {
+                let ty = codegen.gen_type_expr(other, name);
+                quote!{
+                    #doc pub type #ident = #ty;
+                }
+            },
+        };
+    }).collect();
+    let all: Vec<TokenStream> = codegen.extra_defs.into_iter().chain(binding_defs).collect();
+    return quote!{
+        #(#all) *
+    };
 }
 
 /// Generate rust types that would serialize to json that matches a schema.
-pub fn generate_rust(schema: &Schemask) -> String {
-    let mut codegen = CodeGen::new();
-    let mut sorted_bindings: Vec<_> = schema.bindings.iter().collect();
-    sorted_bindings.sort_by_key(|(k, _)| k.as_str());
-    let binding_defs: Vec<TokenStream> =
-        sorted_bindings.iter().map(|(name, maskoid)| codegen.gen_type_def(name, maskoid)).collect();
-    let extra_defs = codegen.extra_defs;
-    let all: Vec<TokenStream> = extra_defs.into_iter().chain(binding_defs).collect();
-    let tokens = quote!{
-        #(#all) *
-    };
-    let code = tokens.to_string();
-    genemichaels_lib::format_str(&code, &genemichaels_lib::FormatConfig::default())
+pub fn generate_rust(schema: &SchemaskV1) -> String {
+    let code = generate_rust_tokens(schema).to_string();
+    return genemichaels_lib::format_str(&code, &genemichaels_lib::FormatConfig::default())
         .map(|r| r.rendered)
-        .unwrap_or(code)
+        .unwrap_or(code);
 }

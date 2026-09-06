@@ -63,8 +63,7 @@ pub struct Args {
 fn main() {
     match (|| {
         ta_return!((), loga::Error);
-        let args = vark::<Args>();
-        match args.command {
+        match vark::<Args>().command {
             Command::Validate(c) => {
                 schemask::validate(&c.schema.value, c.root, &c.data.value).map_err(|e| loga::err(e.to_string()))?;
                 println!("Valid");
@@ -81,8 +80,7 @@ fn main() {
             Command::SchemaskSchema => {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&schemask::latest::Schemask::schemask().to_versioned())
-                        .map_err(|e| loga::err(e.to_string()))?
+                    serde_json::to_string_pretty(&Schemask::schemask()).map_err(|e| loga::err(e.to_string()))?
                 );
             },
         }

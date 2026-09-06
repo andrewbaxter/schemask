@@ -7,17 +7,17 @@ use {
 
 fn tsc(file: &str) -> bool {
     let out = Path::new(env!("OUT_DIR"));
-    Command::new("tsc")
+    return Command::new("tsc")
         .args(["--noEmit", "--strict", "--target", "ES2020", "--lib", "ES2020"])
         .arg(out.join("types.ts"))
         .arg(out.join(file))
         .status()
         .map(|s| s.success())
-        .unwrap_or(false)
+        .unwrap_or(false);
 }
 
 fn tsc_available() -> bool {
-    Command::new("tsc").arg("--version").status().map(|s| s.success()).unwrap_or(false)
+    return Command::new("tsc").arg("--version").status().map(|s| s.success()).unwrap_or(false);
 }
 
 macro_rules! valid{

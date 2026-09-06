@@ -31,15 +31,15 @@ pub struct MaskoidField {
 
 impl MaskoidField {
     pub fn new(maskoid: Maskoid) -> Self {
-        MaskoidField {
+        return MaskoidField {
             description: None,
-            maskoid,
-        }
+            maskoid: maskoid,
+        };
     }
 
     pub fn with_description(mut self, desc: impl Into<String>) -> Self {
         self.description = Some(desc.into());
-        self
+        return self;
     }
 }
 
@@ -102,81 +102,81 @@ pub enum Maskoid {
 
 impl Maskoid {
     pub fn null() -> Self {
-        Maskoid::Null
+        return Maskoid::Null;
     }
 
     pub fn string() -> Self {
-        Maskoid::String
+        return Maskoid::String;
     }
 
     pub fn const_string(value: impl Into<String>) -> Self {
-        Maskoid::ConstString(value.into())
+        return Maskoid::ConstString(value.into());
     }
 
     pub fn bool() -> Self {
-        Maskoid::Bool
+        return Maskoid::Bool;
     }
 
     pub fn int() -> Self {
-        Maskoid::Int
+        return Maskoid::Int;
     }
 
     pub fn float() -> Self {
-        Maskoid::Float
+        return Maskoid::Float;
     }
 
     pub fn any() -> Self {
-        Maskoid::Any
+        return Maskoid::Any;
     }
 
     pub fn ref_(name: impl Into<String>) -> Self {
-        Maskoid::Ref(name.into())
+        return Maskoid::Ref(name.into());
     }
 
     pub fn option(inner: Maskoid) -> Self {
-        Maskoid::Option(Box::new(inner))
+        return Maskoid::Option(Box::new(inner));
     }
 
     pub fn set(inner: Maskoid) -> Self {
-        Maskoid::Set(Box::new(inner))
+        return Maskoid::Set(Box::new(inner));
     }
 
     pub fn list(inner: Maskoid) -> Self {
-        Maskoid::List(Box::new(inner))
+        return Maskoid::List(Box::new(inner));
     }
 
     pub fn string_map(inner: Maskoid) -> Self {
-        Maskoid::StringMap(Box::new(inner))
+        return Maskoid::StringMap(Box::new(inner));
     }
 
     pub fn tuple(elements: Vec<MaskoidField>) -> Self {
-        Maskoid::Tuple(MaskoidTuple {
+        return Maskoid::Tuple(MaskoidTuple {
             description: None,
             elements: elements,
-        })
+        });
     }
 
     pub fn tagged_union(variants: HashMap<String, MaskoidField>) -> Self {
-        Maskoid::TaggedUnion(MaskoidTaggedUnion {
+        return Maskoid::TaggedUnion(MaskoidTaggedUnion {
             description: None,
             variants: variants,
-        })
+        });
     }
 
     pub fn record(fields: HashMap<String, MaskoidField>) -> Self {
-        Maskoid::Record(MaskoidRecord {
+        return Maskoid::Record(MaskoidRecord {
             description: None,
             fields: fields,
-        })
+        });
     }
 
     pub fn description(&self) -> Option<&str> {
-        match self {
+        return match self {
             Maskoid::Tuple(m) => m.description.as_deref(),
             Maskoid::TaggedUnion(m) => m.description.as_deref(),
             Maskoid::Record(m) => m.description.as_deref(),
             _ => None,
-        }
+        };
     }
 
     pub fn with_description(mut self, desc: impl Into<String>) -> Self {
@@ -194,7 +194,8 @@ impl Maskoid {
 /// This is the main type used for validation. It describes the structure of one or
 /// more related data types.
 #[derive(Serialize, Deserialize, Clone, Debug, Maskoidy)]
-pub struct Schemask {
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct SchemaskV1 {
     /// Bindings are names associated with parts of the schema. The names are used to
     /// identify where to start validation, as well as allow types to refer to other
     /// types (or themselves, recursively) forming a graph.
@@ -203,9 +204,9 @@ pub struct Schemask {
     pub default: Option<String>,
 }
 
-impl Schemask {
+impl SchemaskV1 {
     pub fn to_versioned(self) -> crate::Schemask {
-        crate::Schemask::V1(self)
+        return crate::Schemask::V1(self);
     }
 }
 
@@ -217,10 +218,10 @@ pub enum PathSegment {
 
 impl fmt::Display for PathSegment {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
+        return match self {
             PathSegment::Key(k) => write!(f, ".{}", k),
             PathSegment::Index(i) => write!(f, "[{}]", i),
-        }
+        };
     }
 }
 
@@ -233,11 +234,11 @@ pub struct ValidationError {
 impl fmt::Display for ValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let path_str: String = self.path.iter().map(|s| s.to_string()).collect();
-        write!(f, "{}: {}", if path_str.is_empty() {
+        return write!(f, "{}: {}", if path_str.is_empty() {
             "(root)".to_string()
         } else {
             path_str
-        }, self.message)
+        }, self.message);
     }
 }
 
@@ -254,7 +255,7 @@ impl fmt::Display for Invalid {
             }
             write!(f, "{}", e)?;
         }
-        Ok(())
+        return Ok(());
     }
 }
 
@@ -262,7 +263,7 @@ impl std::error::Error for Invalid { }
 
 /// This is the main method for checking data against a schema. If the data is
 /// valid it will return `Ok(())`, otherwise an error.
-pub fn validate(schema: &Schemask, root: Option<String>, data: &serde_json::Value) -> Result<(), Invalid> {
+pub fn validate(schema: &SchemaskV1, root: Option<String>, data: &serde_json::Value) -> Result<(), Invalid> {
     let binding_name = match root.or_else(|| schema.default.clone()) {
         Some(name) => name,
         None => {
@@ -284,15 +285,15 @@ pub fn validate(schema: &Schemask, root: Option<String>, data: &serde_json::Valu
     let mut errors = vec![];
     let mut path = vec![];
     match_maskoid(schema, maskoid, data, &mut path, &mut errors);
-    if errors.is_empty() {
+    return if errors.is_empty() {
         Ok(())
     } else {
-        Err(Invalid { errors })
-    }
+        Err(Invalid { errors: errors })
+    };
 }
 
 fn type_name(v: &serde_json::Value) -> &'static str {
-    match v {
+    return match v {
         serde_json::Value::Null => "null",
         serde_json::Value::Bool(_) => "bool",
         serde_json::Value::Number(n) => {
@@ -305,11 +306,11 @@ fn type_name(v: &serde_json::Value) -> &'static str {
         serde_json::Value::String(_) => "string",
         serde_json::Value::Array(_) => "array",
         serde_json::Value::Object(_) => "object",
-    }
+    };
 }
 
 pub fn match_maskoid(
-    schema: &Schemask,
+    schema: &SchemaskV1,
     maskoid: &Maskoid,
     data: &serde_json::Value,
     path: &mut Vec<PathSegment>,
@@ -513,6 +514,29 @@ pub fn match_maskoid(
             }
         },
         Maskoid::TaggedUnion(m) => {
+            if let Some(tag) = data.as_str() {
+                match m.variants.get(tag) {
+                    Some(variant) if matches!(variant.maskoid, Maskoid::Null) => { },
+                    Some(_) => {
+                        errors.push(ValidationError {
+                            path: path.clone(),
+                            message: format!("Union variant '{}' carries a value, expected a single-key object", tag),
+                        });
+                    },
+                    None => {
+                        let known: Vec<_> = m.variants.keys().cloned().collect();
+                        errors.push(ValidationError {
+                            path: path.clone(),
+                            message: format!(
+                                "Unknown union variant '{}', expected one of: {}",
+                                tag,
+                                known.join(", ")
+                            ),
+                        });
+                    },
+                }
+                return;
+            }
             match data.as_object() {
                 Some(obj) if obj.len() == 1 => {
                     let (tag, value) = obj.iter().next().unwrap();
@@ -547,7 +571,10 @@ pub fn match_maskoid(
                 None => {
                     errors.push(ValidationError {
                         path: path.clone(),
-                        message: format!("Expected tagged union (single-key object), got {}", type_name(data)),
+                        message: format!(
+                            "Expected tagged union (single-key object, or variant name for a valueless variant), got {}",
+                            type_name(data)
+                        ),
                     });
                 },
             }
@@ -599,13 +626,13 @@ mod tests {
         serde_json::json,
     };
 
-    fn schema(maskoid: Maskoid) -> Schemask {
+    fn schema(maskoid: Maskoid) -> SchemaskV1 {
         let mut bindings = HashMap::new();
         bindings.insert("root".to_string(), maskoid);
-        Schemask {
-            bindings,
+        return SchemaskV1 {
+            bindings: bindings,
             default: Some("root".to_string()),
-        }
+        };
     }
 
     fn pass(maskoid: Maskoid, data: serde_json::Value) {
@@ -614,8 +641,7 @@ mod tests {
     }
 
     fn fail(maskoid: Maskoid, data: serde_json::Value, expected_path: &[PathSegment]) {
-        let s = schema(maskoid);
-        let err = validate(&s, None, &data).expect_err("expected failure");
+        let err = validate(&schema(maskoid), None, &data).expect_err("expected failure");
         assert_eq!(err.errors.len(), 1, "expected exactly one error, got: {:?}", err.errors);
         assert_eq!(err.errors[0].path, expected_path, "wrong error path");
     }
@@ -661,8 +687,8 @@ mod tests {
         let mut bindings = HashMap::new();
         bindings.insert("main".to_string(), Maskoid::ref_("other"));
         bindings.insert("other".to_string(), Maskoid::string());
-        let s = Schemask {
-            bindings,
+        let s = SchemaskV1 {
+            bindings: bindings,
             default: Some("main".to_string()),
         };
         assert!(validate(&s, None, &json!("hello")).is_ok());
@@ -791,8 +817,7 @@ mod tests {
     fn test_nested_path_index_then_key() {
         let mut fields = HashMap::new();
         fields.insert("x".to_string(), MaskoidField::new(Maskoid::int()));
-        let m = Maskoid::list(Maskoid::record(fields));
-        fail(m, json!([{
+        fail(Maskoid::list(Maskoid::record(fields)), json!([{
             "x": 1
         }, {
             "x": "bad"
@@ -803,15 +828,14 @@ mod tests {
     fn test_nested_path_key_then_index() {
         let mut fields = HashMap::new();
         fields.insert("items".to_string(), MaskoidField::new(Maskoid::list(Maskoid::int())));
-        let m = Maskoid::record(fields);
-        fail(m, json!({
+        fail(Maskoid::record(fields), json!({
             "items":[1, 2, "bad"]
         }), &[PathSegment::Key("items".to_string()), PathSegment::Index(2)]);
     }
 
     #[test]
     fn test_no_root_no_default() {
-        let s = Schemask {
+        let s = SchemaskV1 {
             bindings: HashMap::new(),
             default: None,
         };
@@ -839,7 +863,7 @@ pub trait Maskoidy {
     /// Build a [`Schemask`] rooted at this type. Derived types are registered as named
     /// bindings; recursive references are broken by returning a [`Maskoid::ref_`] on
     /// the second encounter of a type.
-    fn schemask() -> Schemask {
+    fn schemask() -> crate::Schemask {
         let mut seen = HashSet::new();
         let mut bindings = HashMap::new();
         let _ = Self::maskoid(&mut seen, &mut bindings);
@@ -848,88 +872,88 @@ pub trait Maskoidy {
         } else {
             Some(Self::schema_name().to_string())
         };
-        return Schemask {
+        return (SchemaskV1 {
             bindings: bindings,
             default: default,
-        };
+        }).to_versioned();
     }
 }
 
 impl Maskoidy for () {
     fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut HashMap<String, Maskoid>) -> Maskoid {
-        Maskoid::null()
+        return Maskoid::null();
     }
 }
 
 impl Maskoidy for bool {
     fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut HashMap<String, Maskoid>) -> Maskoid {
-        Maskoid::bool()
+        return Maskoid::bool();
     }
 }
 
 impl Maskoidy for String {
     fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut HashMap<String, Maskoid>) -> Maskoid {
-        Maskoid::string()
+        return Maskoid::string();
     }
 }
 
 impl Maskoidy for i8 {
     fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut HashMap<String, Maskoid>) -> Maskoid {
-        Maskoid::int()
+        return Maskoid::int();
     }
 }
 
 impl Maskoidy for i16 {
     fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut HashMap<String, Maskoid>) -> Maskoid {
-        Maskoid::int()
+        return Maskoid::int();
     }
 }
 
 impl Maskoidy for i32 {
     fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut HashMap<String, Maskoid>) -> Maskoid {
-        Maskoid::int()
+        return Maskoid::int();
     }
 }
 
 impl Maskoidy for i64 {
     fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut HashMap<String, Maskoid>) -> Maskoid {
-        Maskoid::int()
+        return Maskoid::int();
     }
 }
 
 impl Maskoidy for u8 {
     fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut HashMap<String, Maskoid>) -> Maskoid {
-        Maskoid::int()
+        return Maskoid::int();
     }
 }
 
 impl Maskoidy for u16 {
     fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut HashMap<String, Maskoid>) -> Maskoid {
-        Maskoid::int()
+        return Maskoid::int();
     }
 }
 
 impl Maskoidy for u32 {
     fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut HashMap<String, Maskoid>) -> Maskoid {
-        Maskoid::int()
+        return Maskoid::int();
     }
 }
 
 impl Maskoidy for u64 {
     fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut HashMap<String, Maskoid>) -> Maskoid {
-        Maskoid::int()
+        return Maskoid::int();
     }
 }
 
 impl Maskoidy for f32 {
     fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut HashMap<String, Maskoid>) -> Maskoid {
-        Maskoid::float()
+        return Maskoid::float();
     }
 }
 
 impl Maskoidy for f64 {
     fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut HashMap<String, Maskoid>) -> Maskoid {
-        Maskoid::float()
+        return Maskoid::float();
     }
 }
 

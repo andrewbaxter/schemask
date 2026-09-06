@@ -22,12 +22,29 @@ If you're writing a program that takes JSON, publish a schemask spec JSON file. 
 
 If you're writing a program that needs to produce such JSON, use `schemask generate-typescript` or `schemask generate-rust` to generate type definitions for the schema. Use those in your program to produce conformant JSON.
 
+If you're using rust, you can skip the CLI and generate the types inline at compile time with the `from_schemask!` macro, giving it a path to a schemask spec file relative to the current source file:
+
+```rust
+// Expands to structs/enums (with serde attributes) matching `player.json`.
+schemask::from_schemask!("schemas/player.json");
+```
+
+The generated types carry the serde attributes needed to round-trip against the schema: `#[serde(deny_unknown_fields)]` on records, `#[serde(rename = "...")]` when the idiomatic Rust name differs from the wire key, and optional-field skipping. The file is tracked as a build dependency, so edits trigger a recompile.
+
 # Overview
 
-A schemask schema is an object with the following fields:
+A schemask schema is wrapped in a single-key object naming the schemask version, currently always `v1`:
+
+```json
+{ "v1": { "bindings": {}, "default": null } }
+```
+
+The inner object has the following fields:
 
 - Bindings: a list of names and associated types
 - A default root type: which binding to start with when matching data, if none is specified
+
+All keys in a schemask specification are snake case, and unknown keys are rejected.
 
 Schemask defines the following types and examples of their matching JSON:
 
@@ -44,8 +61,8 @@ Schemask defines the following types and examples of their matching JSON:
 - List (TYPE): Matches an array, like `["a", "b", "c"]` if TYPE is `string`. Order is significant.
 - String map (TYPE): Matches an object, like `{k: v}` where `v` matches TYPE.
 - Tuple `[TYPE1, TYPE2, ...]`: Matches an array where each element can have a different type specification (like `["a", 4]`)
-- Tagged union `{KEY1: TYPE1 | KEY2: TYPE2}`: Matches an object that contains exactly one of the listed `KEY` `VALUE` pairs.
-- Record `{KEY1: TYPE1, KEY2: TYPE2}`: Matches an object that has exactly every listed key and a matching value.
+- Tagged union `{KEY1: TYPE1 | KEY2: TYPE2}`: Matches an object that contains exactly one of the listed `KEY` `VALUE` pairs. A variant whose type is null also matches the bare string `"KEY"`, which is how such a variant is written.
+- Record `{KEY1: TYPE1, KEY2: TYPE2}`: Matches an object that has every listed key and a matching value, and no others. A key whose type is an option may be omitted instead of being set to null.
 
 For perhaps slightly more rigor, there's a json encoding of a schemask specification for schemask, available by running the cli: `schemask schemask-schema`.
 

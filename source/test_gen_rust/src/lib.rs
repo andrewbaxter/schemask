@@ -1,4 +1,5 @@
 include!(concat!(env!("OUT_DIR"), "/generated.rs"));
+mod from_macro;
 
 #[cfg(test)]
 mod tests {
@@ -11,48 +12,39 @@ mod tests {
         std::collections::HashMap,
     };
 
-    fn schema() -> schemask::latest::Schemask {
-        // Mirror of the schema in build.rs.
-        let mut bindings = HashMap::new();
-        bindings.insert("Label".to_string(), Maskoid::string());
-        bindings.insert("Active".to_string(), Maskoid::bool());
-        bindings.insert("Count".to_string(), Maskoid::int());
-        bindings.insert("Ratio".to_string(), Maskoid::float());
-        bindings.insert("Tags".to_string(), Maskoid::list(Maskoid::string()));
-        bindings.insert(
-            "Coords".to_string(),
-            Maskoid::tuple(vec![MaskoidField::new(Maskoid::float()), MaskoidField::new(Maskoid::float())]),
-        );
-        bindings.insert("Meta".to_string(), Maskoid::string_map(Maskoid::string()));
-        bindings.insert("Name".to_string(), Maskoid::ref_("Label"));
-        bindings.insert(
-            "Player".to_string(),
-            Maskoid::record({
+    fn check(root: &str, value: &impl serde::Serialize) {
+        schemask::validate(&(|| -> schemask::latest::SchemaskV1 {
+            // Mirror of the schema in build.rs.
+            let mut bindings = HashMap::new();
+            bindings.insert("Label".to_string(), Maskoid::string());
+            bindings.insert("Active".to_string(), Maskoid::bool());
+            bindings.insert("Count".to_string(), Maskoid::int());
+            bindings.insert("Ratio".to_string(), Maskoid::float());
+            bindings.insert("Tags".to_string(), Maskoid::list(Maskoid::string()));
+            bindings.insert(
+                "Coords".to_string(),
+                Maskoid::tuple(vec![MaskoidField::new(Maskoid::float()), MaskoidField::new(Maskoid::float())]),
+            );
+            bindings.insert("Meta".to_string(), Maskoid::string_map(Maskoid::string()));
+            bindings.insert("Name".to_string(), Maskoid::ref_("Label"));
+            bindings.insert("Player".to_string(), Maskoid::record({
                 let mut f = HashMap::new();
                 f.insert("name".to_string(), MaskoidField::new(Maskoid::ref_("Label")));
                 f.insert("score".to_string(), MaskoidField::new(Maskoid::option(Maskoid::int())));
                 f.insert("tags".to_string(), MaskoidField::new(Maskoid::ref_("Tags")));
                 f
-            }),
-        );
-        bindings.insert(
-            "Event".to_string(),
-            Maskoid::tagged_union({
+            }));
+            bindings.insert("Event".to_string(), Maskoid::tagged_union({
                 let mut v = HashMap::new();
                 v.insert("Join".to_string(), MaskoidField::new(Maskoid::ref_("Player")));
                 v.insert("Leave".to_string(), MaskoidField::new(Maskoid::ref_("Label")));
                 v
-            }),
-        );
-        schemask::latest::Schemask {
-            bindings,
-            default: Some("Player".to_string()),
-        }
-    }
-
-    fn check(root: &str, value: &impl serde::Serialize) {
-        let json = serde_json::to_value(value).unwrap();
-        schemask::validate(&schema().to_versioned(), Some(root.to_string()), &json).unwrap();
+            }));
+            return schemask::latest::SchemaskV1 {
+                bindings: bindings,
+                default: Some("Player".to_string()),
+            };
+        })().to_versioned(), Some(root.to_string()), &serde_json::to_value(value).unwrap()).unwrap();
     }
 
     #[test]
@@ -99,38 +91,29 @@ mod tests {
 
     #[test]
     fn test_player_no_score() {
-        check(
-            "Player",
-            &Player {
-                name: "Alice".to_string(),
-                score: None,
-                tags: vec![],
-            },
-        );
+        check("Player", &Player {
+            name: "Alice".to_string(),
+            score: None,
+            tags: vec![],
+        });
     }
 
     #[test]
     fn test_player_with_score() {
-        check(
-            "Player",
-            &Player {
-                name: "Alice".to_string(),
-                score: Some(99),
-                tags: vec!["chess".to_string()],
-            },
-        );
+        check("Player", &Player {
+            name: "Alice".to_string(),
+            score: Some(99),
+            tags: vec!["chess".to_string()],
+        });
     }
 
     #[test]
     fn test_event_join() {
-        check(
-            "Event",
-            &Event::Join(Player {
-                name: "Bob".to_string(),
-                score: Some(10),
-                tags: vec![],
-            }),
-        );
+        check("Event", &Event::Join(Player {
+            name: "Bob".to_string(),
+            score: Some(10),
+            tags: vec![],
+        }));
     }
 
     #[test]

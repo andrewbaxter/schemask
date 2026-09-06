@@ -1,10 +1,8 @@
 use {
     crate::{
         Maskoid,
-        MaskoidRecord,
-        MaskoidTaggedUnion,
     },
-    crate::v1::Schemask,
+    crate::v1::SchemaskV1,
     serde_json,
     std::fmt::Write,
 };
@@ -14,7 +12,7 @@ fn md_escape(s: &str) -> String {
 }
 
 fn md_type(maskoid: &Maskoid) -> String {
-    match maskoid {
+    return match maskoid {
         Maskoid::Null => "null".to_string(),
         Maskoid::Any => "any".to_string(),
         Maskoid::String => "string".to_string(),
@@ -33,34 +31,10 @@ fn md_type(maskoid: &Maskoid) -> String {
         },
         Maskoid::Record(_) => "object".to_string(),
         Maskoid::TaggedUnion(_) => "union".to_string(),
-    }
+    };
 }
 
-fn render_record(out: &mut String, r: &MaskoidRecord) {
-    writeln!(out, "| Field | Type | Description |").unwrap();
-    writeln!(out, "|-------|------|-------------|").unwrap();
-    let mut sorted: Vec<_> = r.fields.iter().collect();
-    sorted.sort_by_key(|(k, _)| k.as_str());
-    for (fname, field) in sorted {
-        let ty = md_escape(&md_type(&field.maskoid));
-        let desc = md_escape(field.description.as_deref().unwrap_or(""));
-        writeln!(out, "| {} | {} | {} |", md_escape(fname), ty, desc).unwrap();
-    }
-}
-
-fn render_tagged_union(out: &mut String, u: &MaskoidTaggedUnion) {
-    writeln!(out, "| Variant | Type | Description |").unwrap();
-    writeln!(out, "|---------|------|-------------|").unwrap();
-    let mut sorted: Vec<_> = u.variants.iter().collect();
-    sorted.sort_by_key(|(k, _)| k.as_str());
-    for (vname, variant) in sorted {
-        let ty = md_escape(&md_type(&variant.maskoid));
-        let desc = md_escape(variant.description.as_deref().unwrap_or(""));
-        writeln!(out, "| {} | {} | {} |", md_escape(vname), ty, desc).unwrap();
-    }
-}
-
-pub fn generate_markdown(schema: &Schemask) -> String {
+pub fn generate_markdown(schema: &SchemaskV1) -> String {
     let mut out = String::new();
     let mut sorted: Vec<_> = schema.bindings.iter().collect();
     sorted.sort_by_key(|(k, _)| k.as_str());
@@ -70,8 +44,31 @@ pub fn generate_markdown(schema: &Schemask) -> String {
             writeln!(out, "{}\n", desc).unwrap();
         }
         match maskoid {
-            Maskoid::Record(r) => render_record(&mut out, r),
-            Maskoid::TaggedUnion(u) => render_tagged_union(&mut out, u),
+            Maskoid::Record(r) => {
+                writeln!(out, "| Field | Type | Description |").unwrap();
+                writeln!(out, "|-------|------|-------------|").unwrap();
+                let mut sorted: Vec<_> = r.fields.iter().collect();
+                sorted.sort_by_key(|(k, _)| k.as_str());
+                for (fname, field) in sorted {
+                    let ty = md_escape(&md_type(&field.maskoid));
+                    let desc = md_escape(field.description.as_deref().unwrap_or(""));
+                    writeln!(out, "| {} | {} | {} |", md_escape(fname), ty, desc).unwrap();
+                }
+            },
+            Maskoid::TaggedUnion(u) => {
+                writeln!(out, "| Variant | Type | Description |").unwrap();
+                writeln!(out, "|---------|------|-------------|").unwrap();
+                let mut sorted: Vec<_> = u.variants.iter().collect();
+                sorted.sort_by_key(|(k, _)| k.as_str());
+                for (vname, variant) in sorted {
+                    let ty = match variant.maskoid {
+                        Maskoid::Null => md_escape(&serde_json::to_string(vname.as_str()).unwrap()),
+                        _ => md_escape(&md_type(&variant.maskoid)),
+                    };
+                    let desc = md_escape(variant.description.as_deref().unwrap_or(""));
+                    writeln!(out, "| {} | {} | {} |", md_escape(vname), ty, desc).unwrap();
+                }
+            },
             other => writeln!(out, "{}", md_type(other)).unwrap(),
         }
         writeln!(out).unwrap();
