@@ -18,18 +18,9 @@ Schemask is intended to describe data in multiple formats/languages so the follo
 
 # How to use it
 
-If you're writing a program that takes JSON, publish a schemask spec JSON file. If you're using rust, this can be generated using the `#[derive(Schemask)]` macro. Use `schemask generate-markdown` to generate a markdown description of your data format you can publish for users to refer to.
+If you're writing a program that takes JSON, publish a schemask spec JSON file of the JSON you consume for others. If you're using rust, this can be generated using the `#[derive(Schemask)]` macro. Use `schemask generate-markdown` to generate a markdown description of your data format you can publish for users to refer to.
 
-If you're writing a program that needs to produce such JSON, use `schemask generate-typescript` or `schemask generate-rust` to generate type definitions for the schema. Use those in your program to produce conformant JSON.
-
-If you're using rust, you can skip the CLI and generate the types inline at compile time with the `from_schemask!` macro, giving it a path to a schemask spec file relative to the current source file:
-
-```rust
-// Expands to structs/enums (with serde attributes) matching `player.json`.
-schemask::from_schemask!("schemas/player.json");
-```
-
-The generated types carry the serde attributes needed to round-trip against the schema: `#[serde(deny_unknown_fields)]` on records, `#[serde(rename = "...")]` when the idiomatic Rust name differs from the wire key, and optional-field skipping. The file is tracked as a build dependency, so edits trigger a recompile.
+If you're writing a program that needs to produce such JSON, use `schemask generate-typescript` or `schemask generate-rust` to generate type definitions for the schema. Use those in your program to produce conformant JSON. Alternatively, if you're using rust you can also use `schemask::from_schemask!("path/to/schema.json");` and have it generate the structs for you, with matching serde properties.
 
 # Overview
 
