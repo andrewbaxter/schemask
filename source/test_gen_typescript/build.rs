@@ -5,7 +5,7 @@ use {
         generate_typescript,
     },
     std::{
-        collections::HashMap,
+        collections::BTreeMap,
         fs,
         path::Path,
     },
@@ -13,7 +13,7 @@ use {
 
 fn main() {
     let schema = (|| -> schemask::latest::SchemaskV1 {
-        let mut bindings = HashMap::new();
+        let mut bindings = BTreeMap::new();
         bindings.insert("Label".to_string(), Maskoid::string());
         bindings.insert("Active".to_string(), Maskoid::bool());
         bindings.insert("Count".to_string(), Maskoid::int());
@@ -26,14 +26,14 @@ fn main() {
         bindings.insert("Meta".to_string(), Maskoid::string_map(Maskoid::string()));
         bindings.insert("Name".to_string(), Maskoid::ref_("Label"));
         bindings.insert("Player".to_string(), Maskoid::record({
-            let mut f = HashMap::new();
+            let mut f = BTreeMap::new();
             f.insert("name".to_string(), MaskoidField::new(Maskoid::ref_("Label")));
             f.insert("score".to_string(), MaskoidField::new(Maskoid::option(Maskoid::int())));
             f.insert("tags".to_string(), MaskoidField::new(Maskoid::ref_("Tags")));
             f
         }));
         bindings.insert("Event".to_string(), Maskoid::tagged_union({
-            let mut v = HashMap::new();
+            let mut v = BTreeMap::new();
             v.insert("Join".to_string(), MaskoidField::new(Maskoid::ref_("Player")));
             v.insert("Leave".to_string(), MaskoidField::new(Maskoid::ref_("Label")));
             v

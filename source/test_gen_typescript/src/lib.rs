@@ -1,23 +1,18 @@
-use {
-    std::{
-        path::Path,
-        process::Command,
-    },
+use std::{
+    path::Path,
+    process::Command,
 };
 
-fn tsc(file: &str) -> bool {
-    let out = Path::new(env!("OUT_DIR"));
-    return Command::new("tsc")
-        .args(["--noEmit", "--strict", "--target", "ES2020", "--lib", "ES2020"])
-        .arg(out.join("types.ts"))
-        .arg(out.join(file))
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-}
-
-fn tsc_available() -> bool {
-    return Command::new("tsc").arg("--version").status().map(|s| s.success()).unwrap_or(false);
+macro_rules! invalid{
+    ($name: ident, $file: literal) => {
+        #[test] fn $name() {
+            if !tsc_available() {
+                eprintln!("tsc not found, skipping");
+                return;
+            }
+            assert!(! tsc($file), "expected {} to fail type-checking", $file);
+        }
+    };
 }
 
 macro_rules! valid{
@@ -32,17 +27,21 @@ macro_rules! valid{
     };
 }
 
-macro_rules! invalid{
-    ($name: ident, $file: literal) => {
-        #[test] fn $name() {
-            if !tsc_available() {
-                eprintln!("tsc not found, skipping");
-                return;
-            }
-            assert!(! tsc($file), "expected {} to fail type-checking", $file);
-        }
-    };
-}
+invalid!(test_invalid_player_name_type, "invalid_player_name_type.ts");
+
+invalid!(test_invalid_player_missing_tags, "invalid_player_missing_tags.ts");
+
+invalid!(test_invalid_player_score_type, "invalid_player_score_type.ts");
+
+invalid!(test_invalid_tags_element_type, "invalid_tags_element_type.ts");
+
+invalid!(test_invalid_coords_length, "invalid_coords_length.ts");
+
+invalid!(test_invalid_event_unknown_variant, "invalid_event_unknown_variant.ts");
+
+invalid!(test_invalid_event_join_payload, "invalid_event_join_payload.ts");
+
+invalid!(test_invalid_meta_value_type, "invalid_meta_value_type.ts");
 
 valid!(test_valid_primitives, "valid_primitives.ts");
 
@@ -64,18 +63,17 @@ valid!(test_valid_meta, "valid_meta.ts");
 
 valid!(test_valid_name_ref, "valid_name_ref.ts");
 
-invalid!(test_invalid_player_name_type, "invalid_player_name_type.ts");
+fn tsc(file: &str) -> bool {
+    let out = Path::new(env!("OUT_DIR"));
+    return Command::new("tsc")
+        .args(["--noEmit", "--strict", "--target", "ES2020", "--lib", "ES2020"])
+        .arg(out.join("types.ts"))
+        .arg(out.join(file))
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+}
 
-invalid!(test_invalid_player_missing_tags, "invalid_player_missing_tags.ts");
-
-invalid!(test_invalid_player_score_type, "invalid_player_score_type.ts");
-
-invalid!(test_invalid_tags_element_type, "invalid_tags_element_type.ts");
-
-invalid!(test_invalid_coords_length, "invalid_coords_length.ts");
-
-invalid!(test_invalid_event_unknown_variant, "invalid_event_unknown_variant.ts");
-
-invalid!(test_invalid_event_join_payload, "invalid_event_join_payload.ts");
-
-invalid!(test_invalid_meta_value_type, "invalid_meta_value_type.ts");
+fn tsc_available() -> bool {
+    return Command::new("tsc").arg("--version").status().map(|s| s.success()).unwrap_or(false);
+}

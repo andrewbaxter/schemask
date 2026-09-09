@@ -1,3 +1,5 @@
-pub use schemask_core::*;
-pub use schemask_derive::Maskoidy;
-pub use schemask_from::from_schemask;
+pub use {
+    schemask_core::*,
+    schemask_derive::Maskoidy,
+    schemask_from::from_schemask,
+};

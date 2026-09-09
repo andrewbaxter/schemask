@@ -12,15 +12,31 @@ use {
     },
 };
 
-/// Validates data against a schema. Exits with an error code if the data is not
-/// valid.
+/// Does all things with schemask schemas.
 #[derive(Aargvark)]
-pub struct CommandValidate {
+pub struct Args {
+    command: Command,
+}
+
+#[derive(Aargvark)]
+#[vark(break_help)]
+pub enum Command {
+    /// Generate markdown documentation for a schemask. Outputs the markdown to stdout.
+    GenerateMarkdown(CommandGenerateMarkdown),
+    /// Generate rust types that match a schemask. Outputs the types to stdout.
+    GenerateRust(CommandGenerateRust),
+    /// Generate typescript definitions that match a schemask. Outputs the definitions
+    /// to stdout.
+    GenerateTypescript(CommandGenerateTypescript),
+    /// Dump the schemask schema for schemask itself. Outputs the
+    SchemaskSchema,
+    /// Validate a json file matches a schemask.
+    Validate(CommandValidate),
+}
+
+#[derive(Aargvark)]
+pub struct CommandGenerateMarkdown {
     schema: AargvarkJson<Schemask>,
-    data: AargvarkJson<serde_json::Value>,
-    /// Override the root binding from the schema to use to validate the data (required
-    /// if binding has no default root).
-    root: Option<String>,
 }
 
 #[derive(Aargvark)]
@@ -33,31 +49,15 @@ pub struct CommandGenerateTypescript {
     schema: AargvarkJson<Schemask>,
 }
 
+/// Validates data against a schema. Exits with an error code if the data is not
+/// valid.
 #[derive(Aargvark)]
-pub struct CommandGenerateMarkdown {
+pub struct CommandValidate {
+    data: AargvarkJson<serde_json::Value>,
+    /// Override the root binding from the schema to use to validate the data (required
+    /// if binding has no default root).
+    root: Option<String>,
     schema: AargvarkJson<Schemask>,
-}
-
-#[derive(Aargvark)]
-#[vark(break_help)]
-pub enum Command {
-    /// Validate a json file matches a schemask.
-    Validate(CommandValidate),
-    /// Generate rust types that match a schemask. Outputs the types to stdout.
-    GenerateRust(CommandGenerateRust),
-    /// Generate typescript definitions that match a schemask. Outputs the definitions
-    /// to stdout.
-    GenerateTypescript(CommandGenerateTypescript),
-    /// Generate markdown documentation for a schemask. Outputs the markdown to stdout.
-    GenerateMarkdown(CommandGenerateMarkdown),
-    /// Dump the schemask schema for schemask itself. Outputs the
-    SchemaskSchema,
-}
-
-/// Does all things with schemask schemas.
-#[derive(Aargvark)]
-pub struct Args {
-    command: Command,
 }
 
 fn main() {

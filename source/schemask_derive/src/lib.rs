@@ -23,173 +23,13 @@ use {
     },
 };
 
-#[derive(Clone, Copy, PartialEq)]
-enum RenameRule {
-    None,
-    Lower,
-    Upper,
-    Pascal,
-    Camel,
-    Snake,
-    ScreamingSnake,
-    Kebab,
-    ScreamingKebab,
-}
-
-impl RenameRule {
-    fn apply_to_variant(&self, variant: &str) -> String {
-        return match self {
-            RenameRule::None | RenameRule::Pascal => variant.to_string(),
-            RenameRule::Lower => variant.to_ascii_lowercase(),
-            RenameRule::Upper => variant.to_ascii_uppercase(),
-            RenameRule::Camel => variant[..1].to_ascii_lowercase() + &variant[1..],
-            RenameRule::Snake => {
-                let mut out = String::new();
-                for (i, ch) in variant.char_indices() {
-                    if i > 0 && ch.is_uppercase() {
-                        out.push('_');
-                    }
-                    out.extend(ch.to_lowercase());
-                }
-                out
-            },
-            RenameRule::ScreamingSnake => RenameRule::Snake.apply_to_variant(variant).to_ascii_uppercase(),
-            RenameRule::Kebab => RenameRule::Snake.apply_to_variant(variant).replace('_', "-"),
-            RenameRule::ScreamingKebab => RenameRule::ScreamingSnake.apply_to_variant(variant).replace('_', "-"),
-        };
-    }
-
-    fn apply_to_field(&self, field: &str) -> String {
-        return match self {
-            RenameRule::None | RenameRule::Lower | RenameRule::Snake => field.to_string(),
-            RenameRule::Upper | RenameRule::ScreamingSnake => field.to_ascii_uppercase(),
-            RenameRule::Pascal => {
-                let mut out = String::new();
-                let mut capitalize = true;
-                for ch in field.chars() {
-                    if ch == '_' {
-                        capitalize = true;
-                    } else if capitalize {
-                        out.push(ch.to_ascii_uppercase());
-                        capitalize = false;
-                    } else {
-                        out.push(ch);
-                    }
-                }
-                out
-            },
-            RenameRule::Camel => {
-                let pascal = RenameRule::Pascal.apply_to_field(field);
-                pascal[..1].to_ascii_lowercase() + &pascal[1..]
-            },
-            RenameRule::Kebab => field.replace('_', "-"),
-            RenameRule::ScreamingKebab => field.to_ascii_uppercase().replace('_', "-"),
-        };
-    }
-}
-
-fn lit_str_value(tt: &TokenTree) -> Option<String> {
-    let TokenTree::Literal(l) = tt else {
-        return None;
+fn apply_desc(expr: TokenStream2, desc: Option<&str>) -> TokenStream2 {
+    return match desc {
+        None => expr,
+        Some(d) => quote!{
+            (#expr).with_description(#d)
+        },
     };
-    let s = l.to_string();
-    if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
-        return Some(s[1 .. s.len() - 1].to_string());
-    }
-    return None;
-}
-
-fn serde_value(attrs: &[Attribute], key: &str) -> Option<String> {
-    for attr in attrs {
-        if !attr.path().is_ident("serde") {
-            continue;
-        }
-        let syn::Meta::List(list) = &attr.meta else {
-            continue;
-        };
-        let toks: Vec<TokenTree> = list.tokens.clone().into_iter().collect();
-        for (i, tok) in toks.iter().enumerate() {
-            let TokenTree::Ident(ident) = tok else {
-                continue;
-            };
-            if ident != key {
-                continue;
-            }
-            if let (Some(TokenTree::Punct(p)), Some(v)) = (toks.get(i + 1), toks.get(i + 2)) {
-                if p.as_char() == '=' {
-                    if let Some(s) = lit_str_value(v) {
-                        return Some(s);
-                    }
-                }
-            }
-            if let Some(TokenTree::Group(g)) = toks.get(i + 1) {
-                let inner: Vec<TokenTree> = g.stream().into_iter().collect();
-                for want in ["serialize", "deserialize"] {
-                    for (j, t) in inner.iter().enumerate() {
-                        let TokenTree::Ident(id) = t else {
-                            continue;
-                        };
-                        if id != want {
-                            continue;
-                        }
-                        if let (Some(TokenTree::Punct(p)), Some(v)) = (inner.get(j + 1), inner.get(j + 2)) {
-                            if p.as_char() == '=' {
-                                if let Some(s) = lit_str_value(v) {
-                                    return Some(s);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    return None;
-}
-
-fn serde_has(attrs: &[Attribute], key: &str) -> bool {
-    for attr in attrs {
-        if !attr.path().is_ident("serde") {
-            continue;
-        }
-        let syn::Meta::List(list) = &attr.meta else {
-            continue;
-        };
-        for tok in list.tokens.clone() {
-            if let TokenTree::Ident(ident) = tok {
-                if ident == key {
-                    return true;
-                }
-            }
-        }
-    }
-    return false;
-}
-
-fn rename_rule(attrs: &[Attribute], key: &str) -> RenameRule {
-    return serde_value(attrs, key).and_then(|s| Some(match s.as_str() {
-        "lowercase" => RenameRule::Lower,
-        "UPPERCASE" => RenameRule::Upper,
-        "PascalCase" => RenameRule::Pascal,
-        "camelCase" => RenameRule::Camel,
-        "snake_case" => RenameRule::Snake,
-        "SCREAMING_SNAKE_CASE" => RenameRule::ScreamingSnake,
-        "kebab-case" => RenameRule::Kebab,
-        "SCREAMING-KEBAB-CASE" => RenameRule::ScreamingKebab,
-        _ => return None,
-    })).unwrap_or(RenameRule::None);
-}
-
-fn unraw(ident: &syn::Ident) -> String {
-    let s = ident.to_string();
-    return s.strip_prefix("r#").unwrap_or(&s).to_string();
-}
-
-fn field_key(field: &syn::Field, rule: RenameRule) -> String {
-    return serde_value(
-        &field.attrs,
-        "rename",
-    ).unwrap_or_else(|| rule.apply_to_field(&unraw(field.ident.as_ref().unwrap())));
 }
 
 #[proc_macro_derive(Maskoidy)]
@@ -284,7 +124,7 @@ pub fn derive_schematize(input: TokenStream) -> TokenStream {
                     }).collect();
                     quote!{
                         {
-                            let mut map = ::std::collections::HashMap::new();
+                            let mut map = ::std::collections::BTreeMap::new();
                             #(#entries) * #schemask_path:: Maskoid:: record(map)
                         }
                     }
@@ -335,7 +175,7 @@ pub fn derive_schematize(input: TokenStream) -> TokenStream {
                         }).collect();
                         quote!{
                             {
-                                let mut map = ::std::collections::HashMap::new();
+                                let mut map = ::std::collections::BTreeMap::new();
                                 #(#field_entries) * #schemask_path:: Maskoid:: record(map)
                             }
                         }
@@ -350,7 +190,7 @@ pub fn derive_schematize(input: TokenStream) -> TokenStream {
             }).collect();
             return apply_desc(quote!{
                 {
-                    let mut variants = ::std::collections::HashMap::new();
+                    let mut variants = ::std::collections::BTreeMap::new();
                     #(#entries) * #schemask_path:: Maskoid:: tagged_union(variants)
                 }
             }, type_doc.as_deref());
@@ -374,7 +214,7 @@ pub fn derive_schematize(input: TokenStream) -> TokenStream {
             }
             fn maskoid(
                 seen: & mut:: std:: collections:: HashSet <&'static str >,
-                bindings: & mut:: std:: collections:: HashMap <:: std:: string:: String,
+                bindings: & mut:: std:: collections:: BTreeMap <:: std:: string:: String,
                 #schemask_path:: Maskoid >,
             ) -> #schemask_path:: Maskoid {
                 let __id = < Self as #schemask_path:: Maskoidy >:: schema_id();
@@ -391,21 +231,6 @@ pub fn derive_schematize(input: TokenStream) -> TokenStream {
             }
         }
     }.into();
-}
-
-fn type_to_maskoid(ty: &Type, schemask_path: &TokenStream2) -> TokenStream2 {
-    return quote!{
-        <#ty as #schemask_path:: Maskoidy >:: maskoid(seen, bindings)
-    };
-}
-
-fn apply_desc(expr: TokenStream2, desc: Option<&str>) -> TokenStream2 {
-    return match desc {
-        None => expr,
-        Some(d) => quote!{
-            (#expr).with_description(#d)
-        },
-    };
 }
 
 fn extract_doc(attrs: &[Attribute]) -> Option<String> {
@@ -427,4 +252,179 @@ fn extract_doc(attrs: &[Attribute]) -> Option<String> {
     } else {
         return Some(lines.join("\n"));
     }
+}
+
+fn field_key(field: &syn::Field, rule: RenameRule) -> String {
+    return serde_value(
+        &field.attrs,
+        "rename",
+    ).unwrap_or_else(|| rule.apply_to_field(&unraw(field.ident.as_ref().unwrap())));
+}
+
+fn lit_str_value(tt: &TokenTree) -> Option<String> {
+    let TokenTree::Literal(l) = tt else {
+        return None;
+    };
+    let s = l.to_string();
+    if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
+        return Some(s[1 .. s.len() - 1].to_string());
+    }
+    return None;
+}
+
+fn rename_rule(attrs: &[Attribute], key: &str) -> RenameRule {
+    return serde_value(attrs, key).and_then(|s| Some(match s.as_str() {
+        "lowercase" => RenameRule::Lower,
+        "UPPERCASE" => RenameRule::Upper,
+        "PascalCase" => RenameRule::Pascal,
+        "camelCase" => RenameRule::Camel,
+        "snake_case" => RenameRule::Snake,
+        "SCREAMING_SNAKE_CASE" => RenameRule::ScreamingSnake,
+        "kebab-case" => RenameRule::Kebab,
+        "SCREAMING-KEBAB-CASE" => RenameRule::ScreamingKebab,
+        _ => return None,
+    })).unwrap_or(RenameRule::None);
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum RenameRule {
+    Camel,
+    Kebab,
+    Lower,
+    None,
+    Pascal,
+    ScreamingKebab,
+    ScreamingSnake,
+    Snake,
+    Upper,
+}
+
+impl RenameRule {
+    fn apply_to_field(&self, field: &str) -> String {
+        return match self {
+            RenameRule::None | RenameRule::Lower | RenameRule::Snake => field.to_string(),
+            RenameRule::Upper | RenameRule::ScreamingSnake => field.to_ascii_uppercase(),
+            RenameRule::Pascal => {
+                let mut out = String::new();
+                let mut capitalize = true;
+                for ch in field.chars() {
+                    if ch == '_' {
+                        capitalize = true;
+                    } else if capitalize {
+                        out.push(ch.to_ascii_uppercase());
+                        capitalize = false;
+                    } else {
+                        out.push(ch);
+                    }
+                }
+                out
+            },
+            RenameRule::Camel => {
+                let pascal = RenameRule::Pascal.apply_to_field(field);
+                pascal[..1].to_ascii_lowercase() + &pascal[1..]
+            },
+            RenameRule::Kebab => field.replace('_', "-"),
+            RenameRule::ScreamingKebab => field.to_ascii_uppercase().replace('_', "-"),
+        };
+    }
+
+    fn apply_to_variant(&self, variant: &str) -> String {
+        return match self {
+            RenameRule::None | RenameRule::Pascal => variant.to_string(),
+            RenameRule::Lower => variant.to_ascii_lowercase(),
+            RenameRule::Upper => variant.to_ascii_uppercase(),
+            RenameRule::Camel => variant[..1].to_ascii_lowercase() + &variant[1..],
+            RenameRule::Snake => {
+                let mut out = String::new();
+                for (i, ch) in variant.char_indices() {
+                    if i > 0 && ch.is_uppercase() {
+                        out.push('_');
+                    }
+                    out.extend(ch.to_lowercase());
+                }
+                out
+            },
+            RenameRule::ScreamingSnake => RenameRule::Snake.apply_to_variant(variant).to_ascii_uppercase(),
+            RenameRule::Kebab => RenameRule::Snake.apply_to_variant(variant).replace('_', "-"),
+            RenameRule::ScreamingKebab => RenameRule::ScreamingSnake.apply_to_variant(variant).replace('_', "-"),
+        };
+    }
+}
+
+fn serde_has(attrs: &[Attribute], key: &str) -> bool {
+    for attr in attrs {
+        if !attr.path().is_ident("serde") {
+            continue;
+        }
+        let syn::Meta::List(list) = &attr.meta else {
+            continue;
+        };
+        for tok in list.tokens.clone() {
+            if let TokenTree::Ident(ident) = tok {
+                if ident == key {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+fn serde_value(attrs: &[Attribute], key: &str) -> Option<String> {
+    for attr in attrs {
+        if !attr.path().is_ident("serde") {
+            continue;
+        }
+        let syn::Meta::List(list) = &attr.meta else {
+            continue;
+        };
+        let toks: Vec<TokenTree> = list.tokens.clone().into_iter().collect();
+        for (i, tok) in toks.iter().enumerate() {
+            let TokenTree::Ident(ident) = tok else {
+                continue;
+            };
+            if ident != key {
+                continue;
+            }
+            if let (Some(TokenTree::Punct(p)), Some(v)) = (toks.get(i + 1), toks.get(i + 2)) {
+                if p.as_char() == '=' {
+                    if let Some(s) = lit_str_value(v) {
+                        return Some(s);
+                    }
+                }
+            }
+            if let Some(TokenTree::Group(g)) = toks.get(i + 1) {
+                let inner: Vec<TokenTree> = g.stream().into_iter().collect();
+                for want in ["serialize", "deserialize"] {
+                    for (j, t) in inner.iter().enumerate() {
+                        let TokenTree::Ident(id) = t else {
+                            continue;
+                        };
+                        if id != want {
+                            continue;
+                        }
+                        if let (Some(TokenTree::Punct(p)), Some(v)) = (inner.get(j + 1), inner.get(j + 2)) {
+                            if p.as_char() == '=' {
+                                if let Some(s) = lit_str_value(v) {
+                                    return Some(s);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return None;
+}
+
+fn type_to_maskoid(ty: &Type, schemask_path: &TokenStream2) -> TokenStream2 {
+    return quote!{
+        <#ty as #schemask_path:: Maskoidy >:: maskoid(seen, bindings)
+    };
+}
+
+fn unraw(ident: &syn::Ident) -> String {
+    let s = ident.to_string();
+    return s.strip_prefix("r#").unwrap_or(&s).to_string();
 }

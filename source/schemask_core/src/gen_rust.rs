@@ -2,8 +2,8 @@ use {
     crate::{
         Maskoid,
         MaskoidField,
+        v1::SchemaskV1,
     },
-    crate::v1::SchemaskV1,
     heck::{
         ToSnakeCase,
         ToUpperCamelCase,
@@ -17,38 +17,104 @@ use {
         format_ident,
         quote,
     },
-    std::collections::HashMap,
+    std::collections::BTreeMap,
 };
-
-fn to_ident(cased: &str) -> Ident {
-    if cased.is_empty() {
-        return Ident::new("_field", Span::call_site());
-    }
-    if syn::parse_str::<Ident>(cased).is_ok() {
-        return Ident::new(cased, Span::call_site());
-    }
-    if syn::parse_str::<Ident>(&format!("r#{}", cased)).is_ok() {
-        return Ident::new_raw(cased, Span::call_site());
-    }
-    return Ident::new(&format!("_{}", cased), Span::call_site());
-}
-
-fn rename_attr(key: &str, ident: &Ident) -> TokenStream {
-    let name = ident.to_string();
-    if name.strip_prefix("r#").unwrap_or(&name) == key {
-        return quote!{
-        };
-    }
-    return quote!{
-        #[serde(rename = #key)]
-    };
-}
 
 struct CodeGen {
     extra_defs: Vec<TokenStream>,
 }
 
 impl CodeGen {
+    fn gen_record(
+        &mut self,
+        name: &str,
+        fields: &BTreeMap<String, MaskoidField>,
+        description: Option<&str>,
+    ) -> TokenStream {
+        let ident = format_ident!("{}", name);
+        let doc = generate_docattr(description);
+        let mut sorted_fields: Vec<_> = fields.iter().collect();
+        sorted_fields.sort_by_key(|(k, _)| k.as_str());
+        let field_tokens: Vec<TokenStream> = sorted_fields.iter().map(|(fname, field)| {
+            fn to_pascal_case(s: &str) -> String {
+                let mut result = String::new();
+                let mut capitalize = true;
+                for c in s.chars() {
+                    if c == '_' || c == '-' {
+                        capitalize = true;
+                    } else if capitalize {
+                        result.extend(c.to_uppercase());
+                        capitalize = false;
+                    } else {
+                        result.push(c);
+                    }
+                }
+                return result;
+            }
+
+            let fident = to_ident(&fname.to_snake_case());
+            let frename = rename_attr(fname, &fident);
+            let hint = format!("{}{}", name, to_pascal_case(fname));
+            let field_doc = generate_docattr(field.description.as_deref());
+            match &field.maskoid {
+                Maskoid::Option(_) => {
+                    // Call gen_type_expr on the _full_ Option maskoid rather than its inner, so
+                    // Option(Option(...)) produces Option`<Wrapper>` rather than Option<Option<...>>.
+                    let full_ty = self.gen_type_expr(&field.maskoid, &hint);
+                    quote!{
+                        #field_doc #frename #[
+                            serde(skip_serializing_if = "Option::is_none", default)
+                        ] pub #fident: #full_ty
+                    }
+                },
+                other => {
+                    let ty = self.gen_type_expr(other, &hint);
+                    quote!{
+                        #field_doc #frename pub #fident: #ty
+                    }
+                },
+            }
+        }).collect();
+        quote!{
+            #doc #[derive(::serde::Serialize, ::serde::Deserialize)] #[serde(deny_unknown_fields)] pub struct #ident {
+                #(#field_tokens),
+                *
+            }
+        }
+    }
+
+    fn gen_tagged_union(
+        &mut self,
+        name: &str,
+        variants: &BTreeMap<String, MaskoidField>,
+        description: Option<&str>,
+    ) -> TokenStream {
+        let ident = format_ident!("{}", name);
+        let doc = generate_docattr(description);
+        let mut sorted_variants: Vec<_> = variants.iter().collect();
+        sorted_variants.sort_by_key(|(k, _)| k.as_str());
+        let variant_tokens: Vec<TokenStream> = sorted_variants.iter().map(|(vname, variant)| {
+            let vident = to_ident(&vname.to_upper_camel_case());
+            let vrename = rename_attr(vname, &vident);
+            let variant_doc = generate_docattr(variant.description.as_deref());
+            if matches!(variant.maskoid, Maskoid::Null) {
+                return quote!{
+                    #variant_doc #vrename #vident
+                };
+            }
+            let vty = self.gen_type_expr(&variant.maskoid, &format!("{}{}", name, vname));
+            quote!{
+                #variant_doc #vrename #vident(#vty)
+            }
+        }).collect();
+        quote!{
+            #doc #[derive(::serde::Serialize, ::serde::Deserialize)] pub enum #ident {
+                #(#variant_tokens),
+                *
+            }
+        }
+    }
+
     /// Returns a Rust type expression for the given maskoid. For Record and
     /// TaggedUnion, a helper type named after `hint` is added to extra_defs. For
     /// nested Option(Option(...)), a wrapper struct is added to extra_defs.
@@ -152,96 +218,6 @@ impl CodeGen {
             },
         };
     }
-
-    fn gen_record(
-        &mut self,
-        name: &str,
-        fields: &HashMap<String, MaskoidField>,
-        description: Option<&str>,
-    ) -> TokenStream {
-        let ident = format_ident!("{}", name);
-        let doc = generate_docattr(description);
-        let mut sorted_fields: Vec<_> = fields.iter().collect();
-        sorted_fields.sort_by_key(|(k, _)| k.as_str());
-        let field_tokens: Vec<TokenStream> = sorted_fields.iter().map(|(fname, field)| {
-            fn to_pascal_case(s: &str) -> String {
-                let mut result = String::new();
-                let mut capitalize = true;
-                for c in s.chars() {
-                    if c == '_' || c == '-' {
-                        capitalize = true;
-                    } else if capitalize {
-                        result.extend(c.to_uppercase());
-                        capitalize = false;
-                    } else {
-                        result.push(c);
-                    }
-                }
-                return result;
-            }
-
-            let fident = to_ident(&fname.to_snake_case());
-            let frename = rename_attr(fname, &fident);
-            let hint = format!("{}{}", name, to_pascal_case(fname));
-            let field_doc = generate_docattr(field.description.as_deref());
-            match &field.maskoid {
-                Maskoid::Option(_) => {
-                    // Call gen_type_expr on the _full_ Option maskoid rather than its inner, so
-                    // Option(Option(...)) produces Option`<Wrapper>` rather than Option<Option<...>>.
-                    let full_ty = self.gen_type_expr(&field.maskoid, &hint);
-                    quote!{
-                        #field_doc #frename #[
-                            serde(skip_serializing_if = "Option::is_none", default)
-                        ] pub #fident: #full_ty
-                    }
-                },
-                other => {
-                    let ty = self.gen_type_expr(other, &hint);
-                    quote!{
-                        #field_doc #frename pub #fident: #ty
-                    }
-                },
-            }
-        }).collect();
-        quote!{
-            #doc #[derive(::serde::Serialize, ::serde::Deserialize)] #[serde(deny_unknown_fields)] pub struct #ident {
-                #(#field_tokens),
-                *
-            }
-        }
-    }
-
-    fn gen_tagged_union(
-        &mut self,
-        name: &str,
-        variants: &HashMap<String, MaskoidField>,
-        description: Option<&str>,
-    ) -> TokenStream {
-        let ident = format_ident!("{}", name);
-        let doc = generate_docattr(description);
-        let mut sorted_variants: Vec<_> = variants.iter().collect();
-        sorted_variants.sort_by_key(|(k, _)| k.as_str());
-        let variant_tokens: Vec<TokenStream> = sorted_variants.iter().map(|(vname, variant)| {
-            let vident = to_ident(&vname.to_upper_camel_case());
-            let vrename = rename_attr(vname, &vident);
-            let variant_doc = generate_docattr(variant.description.as_deref());
-            if matches!(variant.maskoid, Maskoid::Null) {
-                return quote!{
-                    #variant_doc #vrename #vident
-                };
-            }
-            let vty = self.gen_type_expr(&variant.maskoid, &format!("{}{}", name, vname));
-            quote!{
-                #variant_doc #vrename #vident(#vty)
-            }
-        }).collect();
-        quote!{
-            #doc #[derive(::serde::Serialize, ::serde::Deserialize)] pub enum #ident {
-                #(#variant_tokens),
-                *
-            }
-        }
-    }
 }
 
 fn generate_docattr(desc: Option<&str>) -> TokenStream {
@@ -252,6 +228,14 @@ fn generate_docattr(desc: Option<&str>) -> TokenStream {
             #[doc = #s]
         },
     };
+}
+
+/// Generate rust types that would serialize to json that matches a schema.
+pub fn generate_rust(schema: &SchemaskV1) -> String {
+    let code = generate_rust_tokens(schema).to_string();
+    return genemichaels_lib::format_str(&code, &genemichaels_lib::FormatConfig::default())
+        .map(|r| r.rendered)
+        .unwrap_or(code);
 }
 
 pub fn generate_rust_tokens(schema: &SchemaskV1) -> TokenStream {
@@ -279,10 +263,26 @@ pub fn generate_rust_tokens(schema: &SchemaskV1) -> TokenStream {
     };
 }
 
-/// Generate rust types that would serialize to json that matches a schema.
-pub fn generate_rust(schema: &SchemaskV1) -> String {
-    let code = generate_rust_tokens(schema).to_string();
-    return genemichaels_lib::format_str(&code, &genemichaels_lib::FormatConfig::default())
-        .map(|r| r.rendered)
-        .unwrap_or(code);
+fn rename_attr(key: &str, ident: &Ident) -> TokenStream {
+    let name = ident.to_string();
+    if name.strip_prefix("r#").unwrap_or(&name) == key {
+        return quote!{
+        };
+    }
+    return quote!{
+        #[serde(rename = #key)]
+    };
+}
+
+fn to_ident(cased: &str) -> Ident {
+    if cased.is_empty() {
+        return Ident::new("_field", Span::call_site());
+    }
+    if syn::parse_str::<Ident>(cased).is_ok() {
+        return Ident::new(cased, Span::call_site());
+    }
+    if syn::parse_str::<Ident>(&format!("r#{}", cased)).is_ok() {
+        return Ident::new_raw(cased, Span::call_site());
+    }
+    return Ident::new(&format!("_{}", cased), Span::call_site());
 }

@@ -1,10 +1,29 @@
 use {
     crate::{
         Maskoid,
+        v1::SchemaskV1,
     },
-    crate::v1::SchemaskV1,
     serde_json,
 };
+
+/// Escapes `*/` so it cannot prematurely close a block comment.
+fn escape_jsdoc(s: &str) -> String {
+    return s.replace("*/", "* /");
+}
+
+/// Generate typescript types that, if used to produce data, would serialize to
+/// json that matches a schema.
+pub fn generate_typescript(schema: &SchemaskV1) -> String {
+    let mut sorted: Vec<_> = schema.bindings.iter().collect();
+    sorted.sort_by_key(|(k, _)| k.as_str());
+    return sorted.iter().map(|(name, maskoid)| {
+        let doc = match maskoid.description() {
+            None => String::new(),
+            Some(d) => format!("/** {} */\n", escape_jsdoc(d)),
+        };
+        format!("{}type {} = {};\n", doc, name, ts_type(maskoid))
+    }).collect::<Vec<_>>().join("\n");
+}
 
 /// Returns a TypeScript type expression for the given maskoid.
 fn ts_type(maskoid: &Maskoid) -> String {
@@ -71,23 +90,4 @@ fn ts_type(maskoid: &Maskoid) -> String {
             format!("{{\n{};\n}}", field_strs.join(";\n"))
         },
     };
-}
-
-/// Escapes `*/` so it cannot prematurely close a block comment.
-fn escape_jsdoc(s: &str) -> String {
-    return s.replace("*/", "* /");
-}
-
-/// Generate typescript types that, if used to produce data, would serialize to
-/// json that matches a schema.
-pub fn generate_typescript(schema: &SchemaskV1) -> String {
-    let mut sorted: Vec<_> = schema.bindings.iter().collect();
-    sorted.sort_by_key(|(k, _)| k.as_str());
-    return sorted.iter().map(|(name, maskoid)| {
-        let doc = match maskoid.description() {
-            None => String::new(),
-            Some(d) => format!("/** {} */\n", escape_jsdoc(d)),
-        };
-        format!("{}type {} = {};\n", doc, name, ts_type(maskoid))
-    }).collect::<Vec<_>>().join("\n");
 }

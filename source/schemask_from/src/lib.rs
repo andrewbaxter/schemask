@@ -48,7 +48,7 @@ pub fn from_schemask(input: TokenStream) -> TokenStream {
     let types = schemask_core::generate_rust_tokens(&schema);
     let path_str = path.to_string_lossy();
     return quote!{
-        const _: &[u8] =::std::include_bytes!(#path_str);
+        const _: &[u8] = ::std::include_bytes!(#path_str);
         #types
     }.into();
 }

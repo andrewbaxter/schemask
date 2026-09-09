@@ -1,21 +1,23 @@
-include!(concat!(env!("OUT_DIR"), "/generated.rs"));
 mod from_macro;
 
 #[cfg(test)]
 mod tests {
     use {
-        super::*,
         schemask::{
             Maskoid,
             MaskoidField,
         },
-        std::collections::HashMap,
+        std::collections::{
+            BTreeMap,
+            HashMap,
+        },
+        super::*,
     };
 
     fn check(root: &str, value: &impl serde::Serialize) {
         schemask::validate(&(|| -> schemask::latest::SchemaskV1 {
             // Mirror of the schema in build.rs.
-            let mut bindings = HashMap::new();
+            let mut bindings = BTreeMap::new();
             bindings.insert("Label".to_string(), Maskoid::string());
             bindings.insert("Active".to_string(), Maskoid::bool());
             bindings.insert("Count".to_string(), Maskoid::int());
@@ -28,14 +30,14 @@ mod tests {
             bindings.insert("Meta".to_string(), Maskoid::string_map(Maskoid::string()));
             bindings.insert("Name".to_string(), Maskoid::ref_("Label"));
             bindings.insert("Player".to_string(), Maskoid::record({
-                let mut f = HashMap::new();
+                let mut f = BTreeMap::new();
                 f.insert("name".to_string(), MaskoidField::new(Maskoid::ref_("Label")));
                 f.insert("score".to_string(), MaskoidField::new(Maskoid::option(Maskoid::int())));
                 f.insert("tags".to_string(), MaskoidField::new(Maskoid::ref_("Tags")));
                 f
             }));
             bindings.insert("Event".to_string(), Maskoid::tagged_union({
-                let mut v = HashMap::new();
+                let mut v = BTreeMap::new();
                 v.insert("Join".to_string(), MaskoidField::new(Maskoid::ref_("Player")));
                 v.insert("Leave".to_string(), MaskoidField::new(Maskoid::ref_("Label")));
                 v
@@ -48,33 +50,8 @@ mod tests {
     }
 
     #[test]
-    fn test_label() {
-        check("Label", &"hello".to_string());
-    }
-
-    #[test]
     fn test_active() {
         check("Active", &true);
-    }
-
-    #[test]
-    fn test_count() {
-        check("Count", &42i64);
-    }
-
-    #[test]
-    fn test_ratio() {
-        check("Ratio", &3.14f64);
-    }
-
-    #[test]
-    fn test_name_ref() {
-        check("Name", &"Alice".to_string());
-    }
-
-    #[test]
-    fn test_tags() {
-        check("Tags", &vec!["alpha".to_string(), "beta".to_string()]);
     }
 
     #[test]
@@ -83,10 +60,39 @@ mod tests {
     }
 
     #[test]
+    fn test_count() {
+        check("Count", &42i64);
+    }
+
+    #[test]
+    fn test_event_join() {
+        check("Event", &Event::Join(Player {
+            name: "Bob".to_string(),
+            score: Some(10),
+            tags: vec![],
+        }));
+    }
+
+    #[test]
+    fn test_event_leave() {
+        check("Event", &Event::Leave("Bob".to_string()));
+    }
+
+    #[test]
+    fn test_label() {
+        check("Label", &"hello".to_string());
+    }
+
+    #[test]
     fn test_meta() {
         let mut m = HashMap::new();
         m.insert("env".to_string(), "prod".to_string());
         check("Meta", &m);
+    }
+
+    #[test]
+    fn test_name_ref() {
+        check("Name", &"Alice".to_string());
     }
 
     #[test]
@@ -108,16 +114,14 @@ mod tests {
     }
 
     #[test]
-    fn test_event_join() {
-        check("Event", &Event::Join(Player {
-            name: "Bob".to_string(),
-            score: Some(10),
-            tags: vec![],
-        }));
+    fn test_ratio() {
+        check("Ratio", &3.14f64);
     }
 
     #[test]
-    fn test_event_leave() {
-        check("Event", &Event::Leave("Bob".to_string()));
+    fn test_tags() {
+        check("Tags", &vec!["alpha".to_string(), "beta".to_string()]);
     }
 }
+
+include!(concat!(env!("OUT_DIR"), "/generated.rs"));

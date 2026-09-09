@@ -1,38 +1,11 @@
 use {
     crate::{
         Maskoid,
+        v1::SchemaskV1,
     },
-    crate::v1::SchemaskV1,
     serde_json,
     std::fmt::Write,
 };
-
-fn md_escape(s: &str) -> String {
-    return s.replace('|', "\\|").replace('\n', " ");
-}
-
-fn md_type(maskoid: &Maskoid) -> String {
-    return match maskoid {
-        Maskoid::Null => "null".to_string(),
-        Maskoid::Any => "any".to_string(),
-        Maskoid::String => "string".to_string(),
-        Maskoid::ConstString(v) => serde_json::to_string(v.as_str()).unwrap(),
-        Maskoid::Bool => "boolean".to_string(),
-        Maskoid::Int => "integer".to_string(),
-        Maskoid::Float => "number".to_string(),
-        Maskoid::Ref(name) => format!("[{name}](#{name})", name = name.to_lowercase()),
-        Maskoid::Option(inner) => format!("{} | null", md_type(inner)),
-        Maskoid::Set(inner) => format!("Set<{}>", md_type(inner)),
-        Maskoid::List(inner) => format!("Array<{}>", md_type(inner)),
-        Maskoid::StringMap(inner) => format!("Record<string, {}>", md_type(inner)),
-        Maskoid::Tuple(t) => {
-            let types: Vec<String> = t.elements.iter().map(|f| md_type(&f.maskoid)).collect();
-            return format!("[{}]", types.join(", "));
-        },
-        Maskoid::Record(_) => "object".to_string(),
-        Maskoid::TaggedUnion(_) => "union".to_string(),
-    };
-}
 
 pub fn generate_markdown(schema: &SchemaskV1) -> String {
     let mut out = String::new();
@@ -74,4 +47,31 @@ pub fn generate_markdown(schema: &SchemaskV1) -> String {
         writeln!(out).unwrap();
     }
     return out;
+}
+
+fn md_escape(s: &str) -> String {
+    return s.replace('|', "\\|").replace('\n', " ");
+}
+
+fn md_type(maskoid: &Maskoid) -> String {
+    return match maskoid {
+        Maskoid::Null => "null".to_string(),
+        Maskoid::Any => "any".to_string(),
+        Maskoid::String => "string".to_string(),
+        Maskoid::ConstString(v) => serde_json::to_string(v.as_str()).unwrap(),
+        Maskoid::Bool => "boolean".to_string(),
+        Maskoid::Int => "integer".to_string(),
+        Maskoid::Float => "number".to_string(),
+        Maskoid::Ref(name) => format!("[{name}](#{name})", name = name.to_lowercase()),
+        Maskoid::Option(inner) => format!("{} | null", md_type(inner)),
+        Maskoid::Set(inner) => format!("Set<{}>", md_type(inner)),
+        Maskoid::List(inner) => format!("Array<{}>", md_type(inner)),
+        Maskoid::StringMap(inner) => format!("Record<string, {}>", md_type(inner)),
+        Maskoid::Tuple(t) => {
+            let types: Vec<String> = t.elements.iter().map(|f| md_type(&f.maskoid)).collect();
+            return format!("[{}]", types.join(", "));
+        },
+        Maskoid::Record(_) => "object".to_string(),
+        Maskoid::TaggedUnion(_) => "union".to_string(),
+    };
 }
