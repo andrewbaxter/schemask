@@ -1,11 +1,11 @@
 [package]
 name = "test_gen_typescript"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2024"
 publish = false
 
 [build-dependencies]
-schemask = { version = "0.1.3", path = ".." }
+schemask = { version = "0.1.4", path = ".." }
 
 [lints.clippy]
 all = "allow"
