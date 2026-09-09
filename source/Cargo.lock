@@ -622,7 +622,7 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "schemask"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "aargvark",
  "flowcontrol",
@@ -636,7 +636,7 @@ dependencies = [
 
 [[package]]
 name = "schemask_core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "genemichaels-lib",
  "heck",
@@ -650,7 +650,7 @@ dependencies = [
 
 [[package]]
 name = "schemask_derive"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -660,7 +660,7 @@ dependencies = [
 
 [[package]]
 name = "schemask_from"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -797,7 +797,7 @@ dependencies = [
 
 [[package]]
 name = "test_gen_rust"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "schemask",
  "serde",
@@ -806,7 +806,7 @@ dependencies = [
 
 [[package]]
 name = "test_gen_typescript"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "schemask",
 ]

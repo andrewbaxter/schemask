@@ -1,6 +1,6 @@
 [package]
 name = "schemask_core"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 license = "ISC"
 repository = "https://github.com/andrewbaxter/schemask"
@@ -8,7 +8,7 @@ readme = "../../readme.md"
 description = "Simple but powerful data schemas (core model and generators)"
 
 [dependencies]
-schemask_derive = { version = "0.1.4", path = "../schemask_derive" }
+schemask_derive = { version = "0.1.5", path = "../schemask_derive" }
 genemichaels-lib = "0.8"
 heck = "0.5"
 proc-macro2 = "1"
