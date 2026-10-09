@@ -54,14 +54,14 @@ mod tests {
     }
 
     fn sample_account() -> Account {
-        Account {
+        return Account {
             avatar_url: None,
             display_name: Some("Ann".to_string()),
             name: "ann".to_string(),
             score: Some(5),
             tags: vec!["chess".to_string()],
             r#type: "admin".to_string(),
-        }
+        };
     }
 }
 

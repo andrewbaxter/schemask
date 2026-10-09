@@ -76,7 +76,7 @@ fn ts_type(maskoid: &Maskoid) -> String {
                     None => String::new(),
                     Some(d) => format!("  /** {} */\n", escape_jsdoc(d)),
                 };
-                match &field.maskoid {
+                return match &field.maskoid {
                     Maskoid::Option(inner) => {
                         if matches!(inner.as_ref(), Maskoid::Option(_)) {
                             format!("{}  {}?: {{ element: {} }} | null", doc, fname, ts_type(inner))
@@ -85,7 +85,7 @@ fn ts_type(maskoid: &Maskoid) -> String {
                         }
                     },
                     other => format!("{}  {}: {}", doc, fname, ts_type(other)),
-                }
+                };
             }).collect();
             format!("{{\n{};\n}}", field_strs.join(";\n"))
         },

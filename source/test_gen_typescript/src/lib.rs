@@ -1,3 +1,4 @@
+#[cfg(test)]
 use std::{
     path::Path,
     process::Command,
@@ -63,6 +64,7 @@ valid!(test_valid_meta, "valid_meta.ts");
 
 valid!(test_valid_name_ref, "valid_name_ref.ts");
 
+#[cfg(test)]
 fn tsc(file: &str) -> bool {
     let out = Path::new(env!("OUT_DIR"));
     return Command::new("tsc")
@@ -74,6 +76,7 @@ fn tsc(file: &str) -> bool {
         .unwrap_or(false);
 }
 
+#[cfg(test)]
 fn tsc_available() -> bool {
     return Command::new("tsc").arg("--version").status().map(|s| s.success()).unwrap_or(false);
 }

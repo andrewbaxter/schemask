@@ -796,6 +796,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "test_gen_java"
+version = "0.1.5"
+dependencies = [
+ "schemask",
+ "serde_json",
+]
+
+[[package]]
 name = "test_gen_rust"
 version = "0.1.5"
 dependencies = [

@@ -36,27 +36,23 @@ impl CodeGen {
         let mut sorted_fields: Vec<_> = fields.iter().collect();
         sorted_fields.sort_by_key(|(k, _)| k.as_str());
         let field_tokens: Vec<TokenStream> = sorted_fields.iter().map(|(fname, field)| {
-            fn to_pascal_case(s: &str) -> String {
-                let mut result = String::new();
-                let mut capitalize = true;
-                for c in s.chars() {
-                    if c == '_' || c == '-' {
-                        capitalize = true;
-                    } else if capitalize {
-                        result.extend(c.to_uppercase());
-                        capitalize = false;
-                    } else {
-                        result.push(c);
-                    }
-                }
-                return result;
-            }
-
             let fident = to_ident(&fname.to_snake_case());
             let frename = rename_attr(fname, &fident);
-            let hint = format!("{}{}", name, to_pascal_case(fname));
+            let mut pascal = String::new();
+            let mut capitalize = true;
+            for c in fname.chars() {
+                if c == '_' || c == '-' {
+                    capitalize = true;
+                } else if capitalize {
+                    pascal.extend(c.to_uppercase());
+                    capitalize = false;
+                } else {
+                    pascal.push(c);
+                }
+            }
+            let hint = format!("{}{}", name, pascal);
             let field_doc = generate_docattr(field.description.as_deref());
-            match &field.maskoid {
+            return match &field.maskoid {
                 Maskoid::Option(_) => {
                     // Call gen_type_expr on the _full_ Option maskoid rather than its inner, so
                     // Option(Option(...)) produces Option`<Wrapper>` rather than Option<Option<...>>.
@@ -73,7 +69,7 @@ impl CodeGen {
                         #field_doc #frename pub #fident: #ty
                     }
                 },
-            }
+            };
         }).collect();
         quote!{
             #doc #[derive(::serde::Serialize, ::serde::Deserialize)] #[serde(deny_unknown_fields)] pub struct #ident {

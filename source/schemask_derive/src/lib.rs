@@ -103,9 +103,9 @@ pub fn derive_schematize(input: TokenStream) -> TokenStream {
                 Fields::Unnamed(f) => {
                     let elems: Vec<_> = f.unnamed.iter().map(|f| {
                         let m = type_to_maskoid(&f.ty, schemask_path);
-                        apply_desc(quote!{
+                        return apply_desc(quote!{
                             #schemask_path:: MaskoidField:: new(#m)
-                        }, extract_doc(&f.attrs).as_deref())
+                        }, extract_doc(&f.attrs).as_deref());
                     }).collect();
                     quote!{
                         #schemask_path:: Maskoid:: tuple(vec![#(#elems), *])
@@ -154,9 +154,9 @@ pub fn derive_schematize(input: TokenStream) -> TokenStream {
                     Fields::Unnamed(f) => {
                         let elems: Vec<_> = f.unnamed.iter().map(|f| {
                             let m = type_to_maskoid(&f.ty, schemask_path);
-                            apply_desc(quote!{
+                            return apply_desc(quote!{
                                 #schemask_path:: MaskoidField:: new(#m)
-                            }, extract_doc(&f.attrs).as_deref())
+                            }, extract_doc(&f.attrs).as_deref());
                         }).collect();
                         quote!{
                             #schemask_path:: Maskoid:: tuple(vec![#(#elems), *])

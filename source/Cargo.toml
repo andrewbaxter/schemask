@@ -1,5 +1,5 @@
 [workspace]
-members = ["schemask_core", "schemask_derive", "schemask_from", "test_gen_rust", "test_gen_typescript"]
+members = ["schemask_core", "schemask_derive", "schemask_from", "test_gen_rust", "test_gen_typescript", "test_gen_java"]
 
 [package]
 name = "schemask"
@@ -9,6 +9,10 @@ license = "ISC"
 repository = "https://github.com/andrewbaxter/schemask"
 readme = "../readme.md"
 description = "Simple but powerful data schemas"
+
+[[bin]]
+name = "schemask"
+path = "src/bin/main.rs"
 
 [dependencies]
 schemask_core = { version = "0.1.5", path = "schemask_core" }
