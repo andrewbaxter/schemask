@@ -20,7 +20,7 @@ Schemask is intended to describe data in multiple formats/languages so the follo
 
 If you're writing a program that takes JSON, publish a schemask spec JSON file of the JSON you consume for others. If you're using rust, this can be generated using the `#[derive(Schemask)]` macro. Use `schemask generate-markdown` to generate a markdown description of your data format you can publish for users to refer to.
 
-If you're writing a program that needs to produce such JSON, use `schemask generate-typescript` or `schemask generate-rust` to generate type definitions for the schema. Use those in your program to produce conformant JSON. Alternatively, if you're using rust you can also use `schemask::from_schemask!("path/to/schema.json");` and have it generate the structs for you, with matching serde properties.
+If you're writing a program that needs to produce such JSON, use `schemask generate-typescript`, `schemask generate-rust`, or `schemask generate-java` to generate type definitions for the schema. Use those in your program to produce conformant JSON. Alternatively, if you're using rust you can also use `schemask::from_schemask!("path/to/schema.json");` and have it generate the structs for you, with matching serde properties.
 
 # Overview
 
