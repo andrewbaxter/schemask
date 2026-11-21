@@ -1,3 +1,5 @@
+<p align="center"><img src="source/mascot1.svg"></p>
+
 Schemask is a data validation specification intended for:
 
 - Data validation
@@ -70,3 +72,5 @@ Do `cargo add schemask`.
 Generate schemas with `#[derive(Schemask)] struct MyType;`, then `MyType::schemask()`.
 
 Validate schemas with `schemask::validate(schema, data)`.
+
+<p align="center"><img src="source/mascot2.svg"></p>
