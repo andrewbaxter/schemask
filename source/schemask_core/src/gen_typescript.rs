@@ -1,3 +1,33 @@
+#[cfg(test)]
+mod tests {
+    use {
+        crate::MaskoidField,
+        std::collections::BTreeMap,
+        super::*,
+    };
+
+    #[test]
+    fn non_identifier_keys_are_quoted() {
+        let mut fields = BTreeMap::new();
+        fields.insert("avatar-url".to_string(), MaskoidField::new(Maskoid::option(Maskoid::string())));
+        fields.insert("a b".to_string(), MaskoidField::new(Maskoid::int()));
+        fields.insert("ok_1".to_string(), MaskoidField::new(Maskoid::int()));
+        let mut variants = BTreeMap::new();
+        variants.insert("my-tag".to_string(), MaskoidField::new(Maskoid::int()));
+        let mut bindings = BTreeMap::new();
+        bindings.insert("R".to_string(), Maskoid::record(fields));
+        bindings.insert("U".to_string(), Maskoid::tagged_union(variants));
+        let out = generate_typescript(&SchemaskV1 {
+            bindings: bindings,
+            default: None,
+        });
+        assert!(out.contains("\"avatar-url\"?: string | null"), "{}", out);
+        assert!(out.contains("\"a b\": number"), "{}", out);
+        assert!(out.contains("  ok_1: number"), "{}", out);
+        assert!(out.contains("{ \"my-tag\": number }"), "{}", out);
+    }
+}
+
 use {
     crate::{
         Maskoid,
@@ -16,20 +46,6 @@ fn escape_jsdoc(s: &str) -> String {
     return s.replace("*/", "* /");
 }
 
-fn ts_key(key: &str) -> String {
-    let mut chars = key.chars();
-    let ident = match chars.next() {
-        Some(c) if c.is_ascii_alphabetic() || c == '_' || c == '$' => {
-            chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
-        },
-        _ => false,
-    };
-    if ident {
-        return key.to_string();
-    }
-    return serde_json::to_string(key).unwrap();
-}
-
 /// Generate typescript types that, if used to produce data, would serialize to
 /// json that matches a schema.
 pub fn generate_typescript(schema: &SchemaskV1) -> String {
@@ -42,6 +58,20 @@ pub fn generate_typescript(schema: &SchemaskV1) -> String {
         };
         format!("{}type {} = {};\n", doc, name, ts_type(maskoid))
     }).collect::<Vec<_>>().join("\n");
+}
+
+fn ts_key(key: &str) -> String {
+    let mut chars = key.chars();
+    let ident = match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' || c == '$' => {
+            chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+        },
+        _ => false,
+    };
+    if ident {
+        return key.to_string();
+    }
+    return serde_json::to_string(key).unwrap();
 }
 
 /// Returns a TypeScript type expression for the given maskoid.
@@ -110,34 +140,4 @@ fn ts_type(maskoid: &Maskoid) -> String {
             format!("{{\n{};\n}}", field_strs.join(";\n"))
         },
     };
-}
-
-#[cfg(test)]
-mod tests {
-    use {
-        super::*,
-        crate::MaskoidField,
-        std::collections::BTreeMap,
-    };
-
-    #[test]
-    fn non_identifier_keys_are_quoted() {
-        let mut fields = BTreeMap::new();
-        fields.insert("avatar-url".to_string(), MaskoidField::new(Maskoid::option(Maskoid::string())));
-        fields.insert("a b".to_string(), MaskoidField::new(Maskoid::int()));
-        fields.insert("ok_1".to_string(), MaskoidField::new(Maskoid::int()));
-        let mut variants = BTreeMap::new();
-        variants.insert("my-tag".to_string(), MaskoidField::new(Maskoid::int()));
-        let mut bindings = BTreeMap::new();
-        bindings.insert("R".to_string(), Maskoid::record(fields));
-        bindings.insert("U".to_string(), Maskoid::tagged_union(variants));
-        let out = generate_typescript(&SchemaskV1 {
-            bindings: bindings,
-            default: None,
-        });
-        assert!(out.contains("\"avatar-url\"?: string | null"), "{}", out);
-        assert!(out.contains("\"a b\": number"), "{}", out);
-        assert!(out.contains("  ok_1: number"), "{}", out);
-        assert!(out.contains("{ \"my-tag\": number }"), "{}", out);
-    }
 }

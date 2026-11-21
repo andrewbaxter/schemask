@@ -1,3 +1,32 @@
+#[cfg(test)]
+mod tests {
+    use {
+        crate::MaskoidField,
+        std::collections::BTreeMap,
+        super::*,
+    };
+
+    #[test]
+    fn helper_names_do_not_collide() {
+        let rec = |k: &str| Maskoid::record({
+            let mut f = BTreeMap::new();
+            f.insert(k.to_string(), MaskoidField::new(Maskoid::record(BTreeMap::new())));
+            f
+        });
+        let mut bindings = BTreeMap::new();
+        bindings.insert("Foo".to_string(), rec("bar_baz"));
+        bindings.insert("FooBar".to_string(), rec("baz"));
+        bindings.insert("FooBarBaz2".to_string(), Maskoid::int());
+        let out = generate_rust(&SchemaskV1 {
+            bindings: bindings,
+            default: None,
+        });
+        assert_eq!(out.matches("pub struct FooBarBaz ").count(), 1, "{}", out);
+        assert_eq!(out.matches("pub struct FooBarBaz3 ").count(), 1, "{}", out);
+        assert!(out.contains("pub type FooBarBaz2 = i64;"), "{}", out);
+    }
+}
+
 use {
     crate::{
         Maskoid,
@@ -301,33 +330,4 @@ fn to_ident(cased: &str) -> Ident {
         return Ident::new_raw(cased, Span::call_site());
     }
     return Ident::new(&format!("_{}", cased), Span::call_site());
-}
-
-#[cfg(test)]
-mod tests {
-    use {
-        super::*,
-        crate::MaskoidField,
-        std::collections::BTreeMap,
-    };
-
-    #[test]
-    fn helper_names_do_not_collide() {
-        let rec = |k: &str| Maskoid::record({
-            let mut f = BTreeMap::new();
-            f.insert(k.to_string(), MaskoidField::new(Maskoid::record(BTreeMap::new())));
-            f
-        });
-        let mut bindings = BTreeMap::new();
-        bindings.insert("Foo".to_string(), rec("bar_baz"));
-        bindings.insert("FooBar".to_string(), rec("baz"));
-        bindings.insert("FooBarBaz2".to_string(), Maskoid::int());
-        let out = generate_rust(&SchemaskV1 {
-            bindings: bindings,
-            default: None,
-        });
-        assert_eq!(out.matches("pub struct FooBarBaz ").count(), 1, "{}", out);
-        assert_eq!(out.matches("pub struct FooBarBaz3 ").count(), 1, "{}", out);
-        assert!(out.contains("pub type FooBarBaz2 = i64;"), "{}", out);
-    }
 }

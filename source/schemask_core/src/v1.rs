@@ -60,37 +60,6 @@ mod tests {
     }
 
     #[test]
-    fn test_nested_path_index_then_key() {
-        let mut fields = BTreeMap::new();
-        fields.insert("x".to_string(), MaskoidField::new(Maskoid::int()));
-        fail(Maskoid::list(Maskoid::record(fields)), json!([{
-            "x": 1
-        }, {
-            "x": "bad"
-        }]), &[PathSegment::Index(1), PathSegment::Key("x".to_string())]);
-    }
-
-    #[test]
-    fn test_nested_path_key_then_index() {
-        let mut fields = BTreeMap::new();
-        fields.insert("items".to_string(), MaskoidField::new(Maskoid::list(Maskoid::int())));
-        fail(Maskoid::record(fields), json!({
-            "items":[1, 2, "bad"]
-        }), &[PathSegment::Key("items".to_string()), PathSegment::Index(2)]);
-    }
-
-    #[test]
-    fn test_no_root_no_default() {
-        let s = SchemaskV1 {
-            bindings: BTreeMap::new(),
-            default: None,
-        };
-        let err = validate(&s, None, &json!(null)).expect_err("expected failure");
-        assert_eq!(err.errors.len(), 1);
-        assert_eq!(err.errors[0].path, &[] as &[PathSegment]);
-    }
-
-    #[test]
     fn test_metadata() {
         let md = json!({
             "ui": "slider"
@@ -141,6 +110,37 @@ mod tests {
             let back: Maskoid = serde_json::from_value(encoded).unwrap();
             assert_eq!(back.metadata(), Some(&md));
         }
+    }
+
+    #[test]
+    fn test_nested_path_index_then_key() {
+        let mut fields = BTreeMap::new();
+        fields.insert("x".to_string(), MaskoidField::new(Maskoid::int()));
+        fail(Maskoid::list(Maskoid::record(fields)), json!([{
+            "x": 1
+        }, {
+            "x": "bad"
+        }]), &[PathSegment::Index(1), PathSegment::Key("x".to_string())]);
+    }
+
+    #[test]
+    fn test_nested_path_key_then_index() {
+        let mut fields = BTreeMap::new();
+        fields.insert("items".to_string(), MaskoidField::new(Maskoid::list(Maskoid::int())));
+        fail(Maskoid::record(fields), json!({
+            "items":[1, 2, "bad"]
+        }), &[PathSegment::Key("items".to_string()), PathSegment::Index(2)]);
+    }
+
+    #[test]
+    fn test_no_root_no_default() {
+        let s = SchemaskV1 {
+            bindings: BTreeMap::new(),
+            default: None,
+        };
+        let err = validate(&s, None, &json!(null)).expect_err("expected failure");
+        assert_eq!(err.errors.len(), 1);
+        assert_eq!(err.errors[0].path, &[] as &[PathSegment]);
     }
 
     #[test]
@@ -310,7 +310,33 @@ use {
     },
 };
 
+macro_rules! tuple_maskoidy{
+    ($($t: ident), +) => {
+        impl < $($t: Maskoidy),
+        +> Maskoidy for($($t,) +) {
+            fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
+                return Maskoid::tuple(vec![$(MaskoidField:: new($t:: maskoid(seen, bindings))), +]);
+            }
+        }
+    };
+}
+
+tuple_maskoidy!(A);
+
+tuple_maskoidy!(A, B);
+
+tuple_maskoidy!(A, B, C);
+
+tuple_maskoidy!(A, B, C, D);
+
+tuple_maskoidy!(A, B, C, D, E);
+
+tuple_maskoidy!(A, B, C, D, E, F);
+
 pub trait Maskoidy {
+    fn is_plain_option() -> bool {
+        return false;
+    }
     fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid;
 
     /// A unique identifier for this type, used for cycle detection during schema
@@ -318,10 +344,6 @@ pub trait Maskoidy {
     /// definition site. Non-derived implementations return `""`.
     fn schema_id() -> &'static str {
         return "";
-    }
-
-    fn is_plain_option() -> bool {
-        return false;
     }
 
     /// The name under which this type is registered as a binding during schema
@@ -349,9 +371,25 @@ pub trait Maskoidy {
     }
 }
 
+impl<T: Maskoidy + ?Sized> Maskoidy for &T {
+    fn is_plain_option() -> bool {
+        return T::is_plain_option();
+    }
+
+    fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
+        return T::maskoid(seen, bindings);
+    }
+}
+
 impl Maskoidy for () {
     fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
         return Maskoid::null();
+    }
+}
+
+impl<T: Maskoidy, const N: usize> Maskoidy for [T; N] {
+    fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
+        return Maskoid::list(T::maskoid(seen, bindings));
     }
 }
 
@@ -370,6 +408,12 @@ impl<T: Maskoidy> Maskoidy for Box<T> {
 impl<V: Maskoidy> Maskoidy for BTreeMap<String, V> {
     fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
         return Maskoid::string_map(V::maskoid(seen, bindings));
+    }
+}
+
+impl Maskoidy for char {
+    fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
+        return Maskoid::string();
     }
 }
 
@@ -409,7 +453,17 @@ impl Maskoidy for i8 {
     }
 }
 
+impl Maskoidy for isize {
+    fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
+        return Maskoid::int();
+    }
+}
+
 impl<T: Maskoidy> Maskoidy for Option<T> {
+    fn is_plain_option() -> bool {
+        return true;
+    }
+
     fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
         if T::is_plain_option() {
             panic!(
@@ -418,147 +472,11 @@ impl<T: Maskoidy> Maskoidy for Option<T> {
         }
         return Maskoid::option(T::maskoid(seen, bindings));
     }
-
-    fn is_plain_option() -> bool {
-        return true;
-    }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum SOption<T> {
-    None,
-    Some(T),
-}
-
-impl<T> SOption<T> {
-    pub fn as_option(&self) -> Option<&T> {
-        return match self {
-            SOption::None => None,
-            SOption::Some(v) => Some(v),
-        };
-    }
-
-    pub fn into_option(self) -> Option<T> {
-        return match self {
-            SOption::None => None,
-            SOption::Some(v) => Some(v),
-        };
-    }
-}
-
-impl<T> Default for SOption<T> {
-    fn default() -> Self {
-        return SOption::None;
-    }
-}
-
-impl<T> From<Option<T>> for SOption<T> {
-    fn from(value: Option<T>) -> Self {
-        return match value {
-            None => SOption::None,
-            Some(v) => SOption::Some(v),
-        };
-    }
-}
-
-impl<T> From<SOption<T>> for Option<T> {
-    fn from(value: SOption<T>) -> Self {
-        return value.into_option();
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SOptionRepr<T> {
-    value: Option<T>,
-}
-
-impl<T: Serialize> Serialize for SOption<T> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        return SOptionRepr { value: self.as_option() }.serialize(serializer);
-    }
-}
-
-impl<'de, T: Deserialize<'de>> Deserialize<'de> for SOption<T> {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        return Ok(SOption::from(SOptionRepr::<T>::deserialize(deserializer)?.value));
-    }
-}
-
-impl<T: Maskoidy> Maskoidy for SOption<T> {
-    fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
-        if T::is_plain_option() {
-            panic!(
-                "SOption<Option<T>> is ambiguous in serde (SOption::None and SOption::Some(None) both serialize as {{\"value\": null}}); use SOption<SOption<T>> instead"
-            );
-        }
-        return Maskoid::option(T::maskoid(seen, bindings));
-    }
-}
-
-impl<T: Maskoidy + ?Sized> Maskoidy for &T {
-    fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
-        return T::maskoid(seen, bindings);
-    }
-
-    fn is_plain_option() -> bool {
-        return T::is_plain_option();
-    }
-}
-
-impl<T: Maskoidy> Maskoidy for std::rc::Rc<T> {
-    fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
-        return T::maskoid(seen, bindings);
-    }
-
-    fn is_plain_option() -> bool {
-        return T::is_plain_option();
-    }
-}
-
-impl<T: Maskoidy> Maskoidy for std::sync::Arc<T> {
-    fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
-        return T::maskoid(seen, bindings);
-    }
-
-    fn is_plain_option() -> bool {
-        return T::is_plain_option();
-    }
-}
-
-impl Maskoidy for str {
+impl Maskoidy for serde_json::Value {
     fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
-        return Maskoid::string();
-    }
-}
-
-impl Maskoidy for char {
-    fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
-        return Maskoid::string();
-    }
-}
-
-impl Maskoidy for std::path::PathBuf {
-    fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
-        return Maskoid::string();
-    }
-}
-
-impl Maskoidy for usize {
-    fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
-        return Maskoid::int();
-    }
-}
-
-impl Maskoidy for isize {
-    fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
-        return Maskoid::int();
-    }
-}
-
-impl<T: Maskoidy> Maskoidy for std::collections::HashSet<T> {
-    fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
-        return Maskoid::set(T::maskoid(seen, bindings));
+        return Maskoid::any();
     }
 }
 
@@ -568,44 +486,47 @@ impl<T: Maskoidy> Maskoidy for std::collections::BTreeSet<T> {
     }
 }
 
-impl<T: Maskoidy, const N: usize> Maskoidy for [T; N] {
-    fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
-        return Maskoid::list(T::maskoid(seen, bindings));
-    }
-}
-
-macro_rules! tuple_maskoidy{
-    ($($t: ident), +) => {
-        impl < $($t: Maskoidy),
-        +> Maskoidy for($($t,) +) {
-            fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
-                return Maskoid::tuple(vec![$(MaskoidField:: new($t:: maskoid(seen, bindings))), +]);
-            }
-        }
-    };
-}
-
-tuple_maskoidy!(A);
-
-tuple_maskoidy!(A, B);
-
-tuple_maskoidy!(A, B, C);
-
-tuple_maskoidy!(A, B, C, D);
-
-tuple_maskoidy!(A, B, C, D, E);
-
-tuple_maskoidy!(A, B, C, D, E, F);
-
-impl Maskoidy for serde_json::Value {
-    fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
-        return Maskoid::any();
-    }
-}
-
 impl<V: Maskoidy> Maskoidy for std::collections::HashMap<String, V> {
     fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
         return Maskoid::string_map(V::maskoid(seen, bindings));
+    }
+}
+
+impl<T: Maskoidy> Maskoidy for std::collections::HashSet<T> {
+    fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
+        return Maskoid::set(T::maskoid(seen, bindings));
+    }
+}
+
+impl Maskoidy for std::path::PathBuf {
+    fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
+        return Maskoid::string();
+    }
+}
+
+impl<T: Maskoidy> Maskoidy for std::rc::Rc<T> {
+    fn is_plain_option() -> bool {
+        return T::is_plain_option();
+    }
+
+    fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
+        return T::maskoid(seen, bindings);
+    }
+}
+
+impl<T: Maskoidy> Maskoidy for std::sync::Arc<T> {
+    fn is_plain_option() -> bool {
+        return T::is_plain_option();
+    }
+
+    fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
+        return T::maskoid(seen, bindings);
+    }
+}
+
+impl Maskoidy for str {
+    fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
+        return Maskoid::string();
     }
 }
 
@@ -639,10 +560,90 @@ impl Maskoidy for u8 {
     }
 }
 
+impl Maskoidy for usize {
+    fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
+        return Maskoid::int();
+    }
+}
+
 impl<T: Maskoidy> Maskoidy for Vec<T> {
     fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
         return Maskoid::list(T::maskoid(seen, bindings));
     }
+}
+
+pub fn check_schema(schema: &SchemaskV1) -> Result<(), Invalid> {
+    fn walk(
+        schema: &SchemaskV1,
+        maskoid: &Maskoid,
+        path: &mut Vec<PathSegment>,
+        errors: &mut Vec<ValidationError>,
+    ) {
+        match maskoid {
+            Maskoid::Any(_) |
+            Maskoid::Bool(_) |
+            Maskoid::ConstString(_) |
+            Maskoid::Float(_) |
+            Maskoid::Int(_) |
+            Maskoid::Null(_) |
+            Maskoid::String(_) => {
+            },
+            Maskoid::Ref(MaskoidRef { name, .. }) => {
+                if !schema.bindings.contains_key(name) {
+                    errors.push(ValidationError {
+                        path: path.clone(),
+                        message: format!("Ref to undefined binding '{}'", name),
+                    });
+                }
+            },
+            Maskoid::List(MaskoidElement { element: inner, .. }) |
+            Maskoid::Option(MaskoidElement { element: inner, .. }) |
+            Maskoid::Set(MaskoidElement { element: inner, .. }) |
+            Maskoid::StringMap(MaskoidElement { element: inner, .. }) => {
+                walk(schema, inner, path, errors);
+            },
+            Maskoid::Record(m) => {
+                for (k, f) in &m.fields {
+                    path.push(PathSegment::Key(k.clone()));
+                    walk(schema, &f.maskoid, path, errors);
+                    path.pop();
+                }
+            },
+            Maskoid::TaggedUnion(m) => {
+                for (k, f) in &m.variants {
+                    path.push(PathSegment::Key(k.clone()));
+                    walk(schema, &f.maskoid, path, errors);
+                    path.pop();
+                }
+            },
+            Maskoid::Tuple(m) => {
+                for (i, f) in m.elements.iter().enumerate() {
+                    path.push(PathSegment::Index(i));
+                    walk(schema, &f.maskoid, path, errors);
+                    path.pop();
+                }
+            },
+        }
+    }
+
+    let mut errors = vec![];
+    if let Some(default) = &schema.default {
+        if !schema.bindings.contains_key(default) {
+            errors.push(ValidationError {
+                path: vec![],
+                message: format!("Default binding '{}' not found in schema", default),
+            });
+        }
+    }
+    for (name, maskoid) in &schema.bindings {
+        let mut path = vec![PathSegment::Key(name.clone())];
+        walk(schema, maskoid, &mut path, &mut errors);
+    }
+    return if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(Invalid { errors: errors })
+    };
 }
 
 #[derive(Debug, Clone)]
@@ -883,12 +884,27 @@ impl MaskoidField {
 
 #[derive(Serialize, Deserialize, Clone, Debug, Maskoidy)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct MaskoidPlain {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub metadata: Option<serde_json::Value>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Maskoidy)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct MaskoidRecord {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub description: Option<String>,
+    pub fields: BTreeMap<String, MaskoidField>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub metadata: Option<serde_json::Value>,
-    pub fields: BTreeMap<String, MaskoidField>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Maskoidy)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct MaskoidRef {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub metadata: Option<serde_json::Value>,
+    pub name: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Maskoidy)]
@@ -906,24 +922,9 @@ pub struct MaskoidTaggedUnion {
 pub struct MaskoidTuple {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub metadata: Option<serde_json::Value>,
     pub elements: Vec<MaskoidField>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, Maskoidy)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct MaskoidPlain {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub metadata: Option<serde_json::Value>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, Maskoidy)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct MaskoidRef {
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub metadata: Option<serde_json::Value>,
-    pub name: String,
 }
 
 pub fn match_maskoid(
@@ -1278,6 +1279,72 @@ impl SchemaskV1 {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum SOption<T> {
+    None,
+    Some(T),
+}
+
+impl<T> SOption<T> {
+    pub fn as_option(&self) -> Option<&T> {
+        return match self {
+            SOption::None => None,
+            SOption::Some(v) => Some(v),
+        };
+    }
+
+    pub fn into_option(self) -> Option<T> {
+        return match self {
+            SOption::None => None,
+            SOption::Some(v) => Some(v),
+        };
+    }
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for SOption<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        return Ok(SOption::from(SOptionRepr::<T>::deserialize(deserializer)?.value));
+    }
+}
+
+impl<T> Default for SOption<T> {
+    fn default() -> Self {
+        return SOption::None;
+    }
+}
+
+impl<T> From<Option<T>> for SOption<T> {
+    fn from(value: Option<T>) -> Self {
+        return match value {
+            None => SOption::None,
+            Some(v) => SOption::Some(v),
+        };
+    }
+}
+
+impl<T: Maskoidy> Maskoidy for SOption<T> {
+    fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
+        if T::is_plain_option() {
+            panic!(
+                "SOption<Option<T>> is ambiguous in serde (SOption::None and SOption::Some(None) both serialize as {{\"value\": null}}); use SOption<SOption<T>> instead"
+            );
+        }
+        return Maskoid::option(T::maskoid(seen, bindings));
+    }
+}
+
+impl<T: Serialize> Serialize for SOption<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        return SOptionRepr { value: self.as_option() }.serialize(serializer);
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SOptionRepr<T> {
+    value: Option<T>,
+}
+
 fn type_name(v: &serde_json::Value) -> &'static str {
     return match v {
         serde_json::Value::Null => "null",
@@ -1292,80 +1359,6 @@ fn type_name(v: &serde_json::Value) -> &'static str {
         serde_json::Value::String(_) => "string",
         serde_json::Value::Array(_) => "array",
         serde_json::Value::Object(_) => "object",
-    };
-}
-
-pub fn check_schema(schema: &SchemaskV1) -> Result<(), Invalid> {
-    fn walk(
-        schema: &SchemaskV1,
-        maskoid: &Maskoid,
-        path: &mut Vec<PathSegment>,
-        errors: &mut Vec<ValidationError>,
-    ) {
-        match maskoid {
-            Maskoid::Any(_) |
-            Maskoid::Bool(_) |
-            Maskoid::ConstString(_) |
-            Maskoid::Float(_) |
-            Maskoid::Int(_) |
-            Maskoid::Null(_) |
-            Maskoid::String(_) => {
-            },
-            Maskoid::Ref(MaskoidRef { name, .. }) => {
-                if !schema.bindings.contains_key(name) {
-                    errors.push(ValidationError {
-                        path: path.clone(),
-                        message: format!("Ref to undefined binding '{}'", name),
-                    });
-                }
-            },
-            Maskoid::List(MaskoidElement { element: inner, .. }) |
-            Maskoid::Option(MaskoidElement { element: inner, .. }) |
-            Maskoid::Set(MaskoidElement { element: inner, .. }) |
-            Maskoid::StringMap(MaskoidElement { element: inner, .. }) => {
-                walk(schema, inner, path, errors);
-            },
-            Maskoid::Record(m) => {
-                for (k, f) in &m.fields {
-                    path.push(PathSegment::Key(k.clone()));
-                    walk(schema, &f.maskoid, path, errors);
-                    path.pop();
-                }
-            },
-            Maskoid::TaggedUnion(m) => {
-                for (k, f) in &m.variants {
-                    path.push(PathSegment::Key(k.clone()));
-                    walk(schema, &f.maskoid, path, errors);
-                    path.pop();
-                }
-            },
-            Maskoid::Tuple(m) => {
-                for (i, f) in m.elements.iter().enumerate() {
-                    path.push(PathSegment::Index(i));
-                    walk(schema, &f.maskoid, path, errors);
-                    path.pop();
-                }
-            },
-        }
-    }
-
-    let mut errors = vec![];
-    if let Some(default) = &schema.default {
-        if !schema.bindings.contains_key(default) {
-            errors.push(ValidationError {
-                path: vec![],
-                message: format!("Default binding '{}' not found in schema", default),
-            });
-        }
-    }
-    for (name, maskoid) in &schema.bindings {
-        let mut path = vec![PathSegment::Key(name.clone())];
-        walk(schema, maskoid, &mut path, &mut errors);
-    }
-    return if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(Invalid { errors: errors })
     };
 }
 
@@ -1414,5 +1407,11 @@ impl fmt::Display for ValidationError {
         } else {
             path_str
         }, self.message);
+    }
+}
+
+impl<T> From<SOption<T>> for Option<T> {
+    fn from(value: SOption<T>) -> Self {
+        return value.into_option();
     }
 }

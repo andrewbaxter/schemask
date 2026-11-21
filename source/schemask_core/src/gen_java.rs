@@ -19,265 +19,256 @@ use {
     },
 };
 
-pub struct JavaFile {
-    pub path: String,
-    pub source: String,
-}
-
-pub struct JavaConfig {
-    pub package: String,
-}
-
+const ARRAY_NODE: &str = "com.fasterxml.jackson.databind.node.ArrayNode";
 const JSON_NODE: &str = "com.fasterxml.jackson.databind.JsonNode";
 const NODE_FACTORY: &str = "com.fasterxml.jackson.databind.node.JsonNodeFactory.instance";
 const OBJECT_NODE: &str = "com.fasterxml.jackson.databind.node.ObjectNode";
-const ARRAY_NODE: &str = "com.fasterxml.jackson.databind.node.ArrayNode";
 const OPTIONAL: &str = "java.util.Optional";
 
-fn to_java_ident(cased: String) -> String {
-    let reserved: &[&str] =
-        &[
-            "abstract",
-            "assert",
-            "boolean",
-            "break",
-            "byte",
-            "case",
-            "catch",
-            "char",
-            "class",
-            "const",
-            "continue",
-            "default",
-            "do",
-            "double",
-            "else",
-            "enum",
-            "extends",
-            "final",
-            "finally",
-            "float",
-            "for",
-            "goto",
-            "if",
-            "implements",
-            "import",
-            "instanceof",
-            "int",
-            "interface",
-            "long",
-            "native",
-            "new",
-            "package",
-            "private",
-            "protected",
-            "public",
-            "return",
-            "short",
-            "static",
-            "strictfp",
-            "super",
-            "switch",
-            "synchronized",
-            "this",
-            "throw",
-            "throws",
-            "transient",
-            "try",
-            "void",
-            "volatile",
-            "while",
-            "true",
-            "false",
-            "null",
-            "var",
-            "record",
-            "sealed",
-            "permits",
-            "yield",
-            "_",
-        ];
-    let mut out = String::new();
-    for c in cased.chars() {
-        if c.is_ascii_alphanumeric() || c == '_' {
-            out.push(c);
-        } else {
-            out.push('_');
-        }
-    }
-    if out.is_empty() || out.chars().next().unwrap().is_ascii_digit() || reserved.contains(&out.as_str()) {
-        out.insert(0, '_');
-    }
-    return out;
-}
-
-fn java_string(s: &str) -> String {
-    let mut out = String::from("\"");
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    return out;
-}
-
-fn javadoc(desc: Option<&str>) -> String {
-    return match desc {
-        None => String::new(),
-        Some(d) => format!("/** {} */\n", d.replace("*/", "* /")),
-    };
-}
-
-fn exception(message: &str, path: &str) -> String {
-    return format!("throw new IllegalArgumentException({} + \" at \" + {});", message, path);
-}
-
-fn field_path(path: &str, key: &str) -> String {
-    return format!("{} + {}", path, java_string(&format!(".{}", key)));
-}
-
 struct CodeGen<'a> {
-    schema: &'a SchemaskV1,
     config: &'a JavaConfig,
-    files: Vec<JavaFile>,
-    names: BTreeMap<String, String>,
-    used: BTreeSet<String>,
-    generated: BTreeSet<String>,
     counter: usize,
+    files: Vec<JavaFile>,
+    generated: BTreeSet<String>,
+    names: BTreeMap<String, String>,
+    schema: &'a SchemaskV1,
+    used: BTreeSet<String>,
 }
 
 impl<'a> CodeGen<'a> {
-    fn tmp(&mut self, base: &str) -> String {
-        self.counter += 1;
-        return format!("__{}{}", base, self.counter);
-    }
-
-    fn fresh(&mut self, hint: &str) -> String {
-        let mut name = hint.to_string();
-        let mut i = 2;
-        while !self.used.insert(name.clone()) {
-            name = format!("{}{}", hint, i);
-            i += 1;
-        }
-        return name;
-    }
-
-    fn name_for(&mut self, maskoid: &Maskoid, hint: &str) -> String {
-        let key = format!("{}\0{}", hint, serde_json::to_string(maskoid).unwrap());
-        if let Some(name) = self.names.get(&key) {
-            return name.clone();
-        }
-        let name = self.fresh(hint);
-        self.names.insert(key, name.clone());
-        return name;
-    }
-
-    fn type_of(&mut self, maskoid: &Maskoid, hint: &str, boxed: bool) -> String {
+    fn decode(&mut self, maskoid: &Maskoid, hint: &str, json: &str, path: &str, out: &str) -> String {
+        let ty = self.type_of(maskoid, hint, false);
         return match maskoid {
-            Maskoid::Null(_) => "Void".to_string(),
-            Maskoid::String(_) | Maskoid::ConstString(_) => "String".to_string(),
-            Maskoid::Bool(_) => if boxed {
-                "Boolean".to_string()
-            } else {
-                "boolean".to_string()
-            },
-            Maskoid::Int(_) => if boxed {
-                "Long".to_string()
-            } else {
-                "long".to_string()
-            },
-            Maskoid::Float(_) => if boxed {
-                "Double".to_string()
-            } else {
-                "double".to_string()
-            },
-            Maskoid::Any(_) => JSON_NODE.to_string(),
-            Maskoid::Ref(MaskoidRef { name, .. }) => {
-                let target =
-                    self.schema.bindings.get(name).unwrap_or_else(|| panic!("Unknown binding ref {}", name));
-                if is_named(target) {
-                    name.clone()
-                } else {
-                    self.type_of(target, name, boxed)
-                }
-            },
+            Maskoid::Null(_) => format!(
+                "if (!{json}.isNull()) {{\n    {exc}\n}}\n{ty} {out} = null;\n",
+                json = json,
+                exc = exception("\"Expected null\"", path),
+                ty = ty,
+                out = out,
+            ),
+            Maskoid::String(_) => format!(
+                "if (!{json}.isTextual()) {{\n    {exc}\n}}\n{ty} {out} = {json}.textValue();\n",
+                json = json,
+                exc = exception("\"Expected a string\"", path),
+                ty = ty,
+                out = out,
+            ),
+            Maskoid::ConstString(MaskoidConstString { value: expected, .. }) => format!(
+                "if (!{json}.isTextual() || !{json}.textValue().equals({expected})) {{\n    {exc}\n}}\n{ty} {out} = {json}.textValue();\n",
+                json = json,
+                expected = java_string(expected),
+                exc = exception(&format!("\"Expected the string \" + {}", java_string(expected)), path),
+                ty = ty,
+                out = out,
+            ),
+            Maskoid::Bool(_) => format!(
+                "if (!{json}.isBoolean()) {{\n    {exc}\n}}\n{ty} {out} = {json}.booleanValue();\n",
+                json = json,
+                exc = exception("\"Expected a boolean\"", path),
+                ty = ty,
+                out = out,
+            ),
+            Maskoid::Int(_) => format!(
+                "if (!{json}.isIntegralNumber() || !{json}.canConvertToLong()) {{\n    {exc}\n}}\n{ty} {out} = {json}.longValue();\n",
+                json = json,
+                exc = exception("\"Expected an integer\"", path),
+                ty = ty,
+                out = out,
+            ),
+            Maskoid::Float(_) => format!(
+                "if (!{json}.isNumber()) {{\n    {exc}\n}}\n{ty} {out} = {json}.doubleValue();\n",
+                json = json,
+                exc = exception("\"Expected a number\"", path),
+                ty = ty,
+                out = out,
+            ),
+            Maskoid::Any(_) => format!("{} {} = {};\n", ty, out, json),
+            Maskoid::Ref(MaskoidRef { name, .. }) => format!(
+                "{} {} = {}Codec.fromValue({}, {});\n",
+                ty,
+                out,
+                name,
+                json,
+                path
+            ),
             Maskoid::Option(MaskoidElement { element: inner, .. }) => {
-                let inner_ty = self.option_inner_type(inner, hint);
-                format!("{}<{}>", OPTIONAL, inner_ty)
+                let v = self.tmp("v");
+                let body = if matches!(inner.as_ref(), Maskoid::Option(_)) {
+                    let wrapper = self.option_inner_type(inner, hint);
+                    format!("{} {} = {}Codec.fromValue({}, {});\n", wrapper, v, wrapper, json, path)
+                } else {
+                    self.decode(inner, hint, json, path, &v)
+                };
+                let wrap = if matches!(inner.as_ref(), Maskoid::Null(_)) {
+                    "ofNullable"
+                } else {
+                    "of"
+                };
+                format!(
+                    "{ty} {out};\nif ({json}.isNull()) {{\n    {out} = {opt}.empty();\n}} else {{\n{body}    {out} = {opt}.{wrap}({v});\n}}\n",
+                    ty = ty,
+                    out = out,
+                    json = json,
+                    opt = OPTIONAL,
+                    body = indent(&body, 1),
+                    wrap = wrap,
+                    v = v,
+                )
             },
+            Maskoid::Set(MaskoidElement { element: inner, .. }) |
             Maskoid::List(MaskoidElement { element: inner, .. }) => {
-                let inner_ty = self.type_of(inner, hint, true);
-                format!("java.util.List<{}>", inner_ty)
-            },
-            Maskoid::Set(MaskoidElement { element: inner, .. }) => {
-                let inner_ty = self.type_of(inner, hint, true);
-                format!("java.util.Set<{}>", inner_ty)
+                let index = self.tmp("i");
+                let element = self.tmp("e");
+                let v = self.tmp("v");
+                let body = self.decode(inner, hint, &element, &format!("{} + \"[\" + {} + \"]\"", path, index), &v);
+                let (collection, add) = match maskoid {
+                    Maskoid::Set(_) => (
+                        "java.util.LinkedHashSet",
+                        format!(
+                            "    if (!{out}.add({v})) {{\n        {exc}\n    }}\n",
+                            out = out,
+                            v = v,
+                            exc =
+                                exception(
+                                    "\"Duplicate element in set\"",
+                                    &format!("{} + \"[\" + {} + \"]\"", path, index)
+                                ),
+                        ),
+                    ),
+                    _ => ("java.util.ArrayList", format!("    {}.add({});\n", out, v)),
+                };
+                format!(
+                    "if (!{json}.isArray()) {{\n    {exc}\n}}\n{ty} {out} = new {collection}<>();\nint {index} = 0;\nfor (var {element} : {json}) {{\n{body}{add}    {index}++;\n}}\n",
+                    json = json,
+                    exc = exception("\"Expected an array\"", path),
+                    ty = ty,
+                    out = out,
+                    collection = collection,
+                    index = index,
+                    element = element,
+                    body = indent(&body, 1),
+                    add = add,
+                )
             },
             Maskoid::StringMap(MaskoidElement { element: inner, .. }) => {
-                let inner_ty = self.type_of(inner, hint, true);
-                format!("java.util.Map<String, {}>", inner_ty)
+                let entry = self.tmp("e");
+                let v = self.tmp("v");
+                let body =
+                    self.decode(
+                        inner,
+                        hint,
+                        &format!("{}.getValue()", entry),
+                        &format!("{} + \".\" + {}.getKey()", path, entry),
+                        &v,
+                    );
+                format!(
+                    "if (!{json}.isObject()) {{\n    {exc}\n}}\n{ty} {out} = new java.util.LinkedHashMap<>();\nfor (var {entry} : {json}.properties()) {{\n{body}    {out}.put({entry}.getKey(), {v});\n}}\n",
+                    json = json,
+                    exc = exception("\"Expected an object\"", path),
+                    ty = ty,
+                    out = out,
+                    entry = entry,
+                    body = indent(&body, 1),
+                    v = v,
+                )
             },
-            Maskoid::Tuple(_) | Maskoid::Record(_) | Maskoid::TaggedUnion(_) => self.ensure_named(maskoid, hint),
+            Maskoid::Tuple(_) | Maskoid::Record(_) | Maskoid::TaggedUnion(_) => {
+                let name = self.ensure_named(maskoid, hint);
+                format!("{} {} = {}Codec.fromValue({}, {});\n", ty, out, name, json, path)
+            },
         };
     }
 
-    fn option_inner_type(&mut self, inner: &Maskoid, hint: &str) -> String {
+    fn encode(&mut self, maskoid: &Maskoid, hint: &str, expr: &str, out: &str) -> String {
+        return match maskoid {
+            Maskoid::Null(_) => format!("{} {} = {}.nullNode();\n", JSON_NODE, out, NODE_FACTORY),
+            Maskoid::String(_) | Maskoid::ConstString(_) => format!(
+                "{} {} = {}.textNode({});\n",
+                JSON_NODE,
+                out,
+                NODE_FACTORY,
+                expr
+            ),
+            Maskoid::Bool(_) => format!("{} {} = {}.booleanNode({});\n", JSON_NODE, out, NODE_FACTORY, expr),
+            Maskoid::Int(_) | Maskoid::Float(_) => format!(
+                "{} {} = {}.numberNode({});\n",
+                JSON_NODE,
+                out,
+                NODE_FACTORY,
+                expr
+            ),
+            Maskoid::Any(_) => format!("{} {} = {};\n", JSON_NODE, out, expr),
+            Maskoid::Ref(MaskoidRef { name, .. }) => format!(
+                "{} {} = {}Codec.toValue({});\n",
+                JSON_NODE,
+                out,
+                name,
+                expr
+            ),
+            Maskoid::Option(MaskoidElement { element: inner, .. }) => {
+                let unwrapped = format!("{}.get()", expr);
+                let some = self.tmp("j");
+                let body = self.encode_option_inner(inner, hint, &unwrapped, &some);
+                format!(
+                    "{jn} {out};\nif ({expr}.isPresent()) {{\n{body}    {out} = {some};\n}} else {{\n    {out} = {f}.nullNode();\n}}\n",
+                    jn = JSON_NODE,
+                    out = out,
+                    expr = expr,
+                    body = indent(&body, 1),
+                    some = some,
+                    f = NODE_FACTORY,
+                )
+            },
+            Maskoid::Set(MaskoidElement { element: inner, .. }) |
+            Maskoid::List(MaskoidElement { element: inner, .. }) => {
+                let list = self.tmp("a");
+                let element = self.tmp("e");
+                let element_out = self.tmp("j");
+                let body = self.encode(inner, hint, &element, &element_out);
+                format!(
+                    "{an} {list} = {f}.arrayNode();\nfor (var {element} : {expr}) {{\n{body}    {list}.add({element_out});\n}}\n{jn} {out} = {list};\n",
+                    an = ARRAY_NODE,
+                    list = list,
+                    f = NODE_FACTORY,
+                    element = element,
+                    expr = expr,
+                    body = indent(&body, 1),
+                    element_out = element_out,
+                    jn = JSON_NODE,
+                    out = out,
+                )
+            },
+            Maskoid::StringMap(MaskoidElement { element: inner, .. }) => {
+                let map = self.tmp("m");
+                let entry = self.tmp("e");
+                let element_out = self.tmp("j");
+                let body = self.encode(inner, hint, &format!("{}.getValue()", entry), &element_out);
+                format!(
+                    "{on} {map} = {f}.objectNode();\nfor (var {entry} : {expr}.entrySet()) {{\n{body}    {map}.set({entry}.getKey(), {element_out});\n}}\n{jn} {out} = {map};\n",
+                    on = OBJECT_NODE,
+                    map = map,
+                    f = NODE_FACTORY,
+                    entry = entry,
+                    expr = expr,
+                    body = indent(&body, 1),
+                    element_out = element_out,
+                    jn = JSON_NODE,
+                    out = out,
+                )
+            },
+            Maskoid::Tuple(_) | Maskoid::Record(_) | Maskoid::TaggedUnion(_) => {
+                let name = self.ensure_named(maskoid, hint);
+                format!("{} {} = {}Codec.toValue({});\n", JSON_NODE, out, name, expr)
+            },
+        };
+    }
+
+    fn encode_option_inner(&mut self, inner: &Maskoid, hint: &str, expr: &str, out: &str) -> String {
         if matches!(inner, Maskoid::Option(_)) {
-            let wrapper = self.name_for(inner, &format!("{}Wrapper", hint));
-            if self.generated.insert(wrapper.clone()) {
-                let element_ty = self.type_of(inner, &format!("{}Inner", hint), true);
-                self.files.push(JavaFile {
-                    path: self.file_path(&wrapper),
-                    source: format!("{}public record {}({} value) {{}}\n", self.header(), wrapper, element_ty),
-                });
-                let enc_out = self.tmp("j");
-                let enc = self.encode(inner, &format!("{}Inner", hint), "value.value()", &enc_out);
-                let dec_out = self.tmp("v");
-                let dec =
-                    self.decode(
-                        inner,
-                        &format!("{}Inner", hint),
-                        "value.get(\"value\")",
-                        &field_path("path", "value"),
-                        &dec_out,
-                    );
-                let source =
-                    format!(
-                        "{header}public final class {w}Codec {{\n    private {w}Codec() {{}}\n\n    public static {jn} toValue({w} value) {{\n{enc}        {on} __o = {f}.objectNode();\n        __o.set(\"value\", {enc_out});\n        return __o;\n    }}\n\n    public static {w} fromValue({jn} value) {{\n        return fromValue(value, \"$\");\n    }}\n\n    public static {w} fromValue({jn} value, String path) {{\n        if (!value.isObject() || value.size() != 1 || !value.has(\"value\")) {{\n            {exc}\n        }}\n{dec}        return new {w}({dec_out});\n    }}\n}}\n",
-                        header = self.header(),
-                        w = wrapper,
-                        jn = JSON_NODE,
-                        on = OBJECT_NODE,
-                        f = NODE_FACTORY,
-                        enc = indent(&enc, 2),
-                        enc_out = enc_out,
-                        exc = exception("\"Expected an object with exactly the key 'value'\"", "path"),
-                        dec = indent(&dec, 2),
-                        dec_out = dec_out,
-                    );
-                self.files.push(JavaFile {
-                    path: self.file_path(&format!("{}Codec", wrapper)),
-                    source: source,
-                });
-            }
-            return wrapper;
+            let wrapper = self.option_inner_type(inner, hint);
+            return format!("{} {} = {}Codec.toValue({});\n", JSON_NODE, out, wrapper, expr);
         }
-        return self.type_of(inner, hint, true);
-    }
-
-    fn header(&self) -> String {
-        return format!("package {};\n\n", self.config.package);
-    }
-
-    fn file_path(&self, name: &str) -> String {
-        return format!("{}/{}.java", self.config.package.replace('.', "/"), name);
+        return self.encode(inner, hint, expr, out);
     }
 
     fn ensure_named(&mut self, maskoid: &Maskoid, hint: &str) -> String {
@@ -529,6 +520,78 @@ impl<'a> CodeGen<'a> {
         return name.to_string();
     }
 
+    fn file_path(&self, name: &str) -> String {
+        return format!("{}/{}.java", self.config.package.replace('.', "/"), name);
+    }
+
+    fn fresh(&mut self, hint: &str) -> String {
+        let mut name = hint.to_string();
+        let mut i = 2;
+        while !self.used.insert(name.clone()) {
+            name = format!("{}{}", hint, i);
+            i += 1;
+        }
+        return name;
+    }
+
+    fn header(&self) -> String {
+        return format!("package {};\n\n", self.config.package);
+    }
+
+    fn name_for(&mut self, maskoid: &Maskoid, hint: &str) -> String {
+        let key = format!("{}\0{}", hint, serde_json::to_string(maskoid).unwrap());
+        if let Some(name) = self.names.get(&key) {
+            return name.clone();
+        }
+        let name = self.fresh(hint);
+        self.names.insert(key, name.clone());
+        return name;
+    }
+
+    fn option_inner_type(&mut self, inner: &Maskoid, hint: &str) -> String {
+        if matches!(inner, Maskoid::Option(_)) {
+            let wrapper = self.name_for(inner, &format!("{}Wrapper", hint));
+            if self.generated.insert(wrapper.clone()) {
+                let element_ty = self.type_of(inner, &format!("{}Inner", hint), true);
+                self.files.push(JavaFile {
+                    path: self.file_path(&wrapper),
+                    source: format!("{}public record {}({} value) {{}}\n", self.header(), wrapper, element_ty),
+                });
+                let enc_out = self.tmp("j");
+                let enc = self.encode(inner, &format!("{}Inner", hint), "value.value()", &enc_out);
+                let dec_out = self.tmp("v");
+                let dec =
+                    self.decode(
+                        inner,
+                        &format!("{}Inner", hint),
+                        "value.get(\"value\")",
+                        &field_path("path", "value"),
+                        &dec_out,
+                    );
+                let source =
+                    format!(
+                        "{header}public final class {w}Codec {{\n    private {w}Codec() {{}}\n\n    public static {jn} toValue({w} value) {{\n{enc}        {on} __o = {f}.objectNode();\n        __o.set(\"value\", {enc_out});\n        return __o;\n    }}\n\n    public static {w} fromValue({jn} value) {{\n        return fromValue(value, \"$\");\n    }}\n\n    public static {w} fromValue({jn} value, String path) {{\n        if (!value.isObject() || value.size() != 1 || !value.has(\"value\")) {{\n            {exc}\n        }}\n{dec}        return new {w}({dec_out});\n    }}\n}}\n",
+                        header = self.header(),
+                        w = wrapper,
+                        jn = JSON_NODE,
+                        on = OBJECT_NODE,
+                        f = NODE_FACTORY,
+                        enc = indent(&enc, 2),
+                        enc_out = enc_out,
+                        exc = exception("\"Expected an object with exactly the key 'value'\"", "path"),
+                        dec = indent(&dec, 2),
+                        dec_out = dec_out,
+                    );
+                self.files.push(JavaFile {
+                    path: self.file_path(&format!("{}Codec", wrapper)),
+                    source: source,
+                });
+            }
+            return wrapper;
+        }
+        return self.type_of(inner, hint, true);
+    }
+
     fn record_parts(
         &mut self,
         name: &str,
@@ -669,266 +732,67 @@ impl<'a> CodeGen<'a> {
         );
     }
 
-    fn encode(&mut self, maskoid: &Maskoid, hint: &str, expr: &str, out: &str) -> String {
-        return match maskoid {
-            Maskoid::Null(_) => format!("{} {} = {}.nullNode();\n", JSON_NODE, out, NODE_FACTORY),
-            Maskoid::String(_) | Maskoid::ConstString(_) => format!(
-                "{} {} = {}.textNode({});\n",
-                JSON_NODE,
-                out,
-                NODE_FACTORY,
-                expr
-            ),
-            Maskoid::Bool(_) => format!("{} {} = {}.booleanNode({});\n", JSON_NODE, out, NODE_FACTORY, expr),
-            Maskoid::Int(_) | Maskoid::Float(_) => format!(
-                "{} {} = {}.numberNode({});\n",
-                JSON_NODE,
-                out,
-                NODE_FACTORY,
-                expr
-            ),
-            Maskoid::Any(_) => format!("{} {} = {};\n", JSON_NODE, out, expr),
-            Maskoid::Ref(MaskoidRef { name, .. }) => format!(
-                "{} {} = {}Codec.toValue({});\n",
-                JSON_NODE,
-                out,
-                name,
-                expr
-            ),
-            Maskoid::Option(MaskoidElement { element: inner, .. }) => {
-                let unwrapped = format!("{}.get()", expr);
-                let some = self.tmp("j");
-                let body = self.encode_option_inner(inner, hint, &unwrapped, &some);
-                format!(
-                    "{jn} {out};\nif ({expr}.isPresent()) {{\n{body}    {out} = {some};\n}} else {{\n    {out} = {f}.nullNode();\n}}\n",
-                    jn = JSON_NODE,
-                    out = out,
-                    expr = expr,
-                    body = indent(&body, 1),
-                    some = some,
-                    f = NODE_FACTORY,
-                )
-            },
-            Maskoid::Set(MaskoidElement { element: inner, .. }) |
-            Maskoid::List(MaskoidElement { element: inner, .. }) => {
-                let list = self.tmp("a");
-                let element = self.tmp("e");
-                let element_out = self.tmp("j");
-                let body = self.encode(inner, hint, &element, &element_out);
-                format!(
-                    "{an} {list} = {f}.arrayNode();\nfor (var {element} : {expr}) {{\n{body}    {list}.add({element_out});\n}}\n{jn} {out} = {list};\n",
-                    an = ARRAY_NODE,
-                    list = list,
-                    f = NODE_FACTORY,
-                    element = element,
-                    expr = expr,
-                    body = indent(&body, 1),
-                    element_out = element_out,
-                    jn = JSON_NODE,
-                    out = out,
-                )
-            },
-            Maskoid::StringMap(MaskoidElement { element: inner, .. }) => {
-                let map = self.tmp("m");
-                let entry = self.tmp("e");
-                let element_out = self.tmp("j");
-                let body = self.encode(inner, hint, &format!("{}.getValue()", entry), &element_out);
-                format!(
-                    "{on} {map} = {f}.objectNode();\nfor (var {entry} : {expr}.entrySet()) {{\n{body}    {map}.set({entry}.getKey(), {element_out});\n}}\n{jn} {out} = {map};\n",
-                    on = OBJECT_NODE,
-                    map = map,
-                    f = NODE_FACTORY,
-                    entry = entry,
-                    expr = expr,
-                    body = indent(&body, 1),
-                    element_out = element_out,
-                    jn = JSON_NODE,
-                    out = out,
-                )
-            },
-            Maskoid::Tuple(_) | Maskoid::Record(_) | Maskoid::TaggedUnion(_) => {
-                let name = self.ensure_named(maskoid, hint);
-                format!("{} {} = {}Codec.toValue({});\n", JSON_NODE, out, name, expr)
-            },
-        };
+    fn tmp(&mut self, base: &str) -> String {
+        self.counter += 1;
+        return format!("__{}{}", base, self.counter);
     }
 
-    fn encode_option_inner(&mut self, inner: &Maskoid, hint: &str, expr: &str, out: &str) -> String {
-        if matches!(inner, Maskoid::Option(_)) {
-            let wrapper = self.option_inner_type(inner, hint);
-            return format!("{} {} = {}Codec.toValue({});\n", JSON_NODE, out, wrapper, expr);
-        }
-        return self.encode(inner, hint, expr, out);
-    }
-
-    fn decode(&mut self, maskoid: &Maskoid, hint: &str, json: &str, path: &str, out: &str) -> String {
-        let ty = self.type_of(maskoid, hint, false);
+    fn type_of(&mut self, maskoid: &Maskoid, hint: &str, boxed: bool) -> String {
         return match maskoid {
-            Maskoid::Null(_) => format!(
-                "if (!{json}.isNull()) {{\n    {exc}\n}}\n{ty} {out} = null;\n",
-                json = json,
-                exc = exception("\"Expected null\"", path),
-                ty = ty,
-                out = out,
-            ),
-            Maskoid::String(_) => format!(
-                "if (!{json}.isTextual()) {{\n    {exc}\n}}\n{ty} {out} = {json}.textValue();\n",
-                json = json,
-                exc = exception("\"Expected a string\"", path),
-                ty = ty,
-                out = out,
-            ),
-            Maskoid::ConstString(MaskoidConstString { value: expected, .. }) => format!(
-                "if (!{json}.isTextual() || !{json}.textValue().equals({expected})) {{\n    {exc}\n}}\n{ty} {out} = {json}.textValue();\n",
-                json = json,
-                expected = java_string(expected),
-                exc = exception(&format!("\"Expected the string \" + {}", java_string(expected)), path),
-                ty = ty,
-                out = out,
-            ),
-            Maskoid::Bool(_) => format!(
-                "if (!{json}.isBoolean()) {{\n    {exc}\n}}\n{ty} {out} = {json}.booleanValue();\n",
-                json = json,
-                exc = exception("\"Expected a boolean\"", path),
-                ty = ty,
-                out = out,
-            ),
-            Maskoid::Int(_) => format!(
-                "if (!{json}.isIntegralNumber() || !{json}.canConvertToLong()) {{\n    {exc}\n}}\n{ty} {out} = {json}.longValue();\n",
-                json = json,
-                exc = exception("\"Expected an integer\"", path),
-                ty = ty,
-                out = out,
-            ),
-            Maskoid::Float(_) => format!(
-                "if (!{json}.isNumber()) {{\n    {exc}\n}}\n{ty} {out} = {json}.doubleValue();\n",
-                json = json,
-                exc = exception("\"Expected a number\"", path),
-                ty = ty,
-                out = out,
-            ),
-            Maskoid::Any(_) => format!("{} {} = {};\n", ty, out, json),
-            Maskoid::Ref(MaskoidRef { name, .. }) => format!(
-                "{} {} = {}Codec.fromValue({}, {});\n",
-                ty,
-                out,
-                name,
-                json,
-                path
-            ),
-            Maskoid::Option(MaskoidElement { element: inner, .. }) => {
-                let v = self.tmp("v");
-                let body = if matches!(inner.as_ref(), Maskoid::Option(_)) {
-                    let wrapper = self.option_inner_type(inner, hint);
-                    format!("{} {} = {}Codec.fromValue({}, {});\n", wrapper, v, wrapper, json, path)
-                } else {
-                    self.decode(inner, hint, json, path, &v)
-                };
-                let wrap = if matches!(inner.as_ref(), Maskoid::Null(_)) {
-                    "ofNullable"
-                } else {
-                    "of"
-                };
-                format!(
-                    "{ty} {out};\nif ({json}.isNull()) {{\n    {out} = {opt}.empty();\n}} else {{\n{body}    {out} = {opt}.{wrap}({v});\n}}\n",
-                    ty = ty,
-                    out = out,
-                    json = json,
-                    opt = OPTIONAL,
-                    body = indent(&body, 1),
-                    wrap = wrap,
-                    v = v,
-                )
+            Maskoid::Null(_) => "Void".to_string(),
+            Maskoid::String(_) | Maskoid::ConstString(_) => "String".to_string(),
+            Maskoid::Bool(_) => if boxed {
+                "Boolean".to_string()
+            } else {
+                "boolean".to_string()
             },
-            Maskoid::Set(MaskoidElement { element: inner, .. }) |
+            Maskoid::Int(_) => if boxed {
+                "Long".to_string()
+            } else {
+                "long".to_string()
+            },
+            Maskoid::Float(_) => if boxed {
+                "Double".to_string()
+            } else {
+                "double".to_string()
+            },
+            Maskoid::Any(_) => JSON_NODE.to_string(),
+            Maskoid::Ref(MaskoidRef { name, .. }) => {
+                let target =
+                    self.schema.bindings.get(name).unwrap_or_else(|| panic!("Unknown binding ref {}", name));
+                if is_named(target) {
+                    name.clone()
+                } else {
+                    self.type_of(target, name, boxed)
+                }
+            },
+            Maskoid::Option(MaskoidElement { element: inner, .. }) => {
+                let inner_ty = self.option_inner_type(inner, hint);
+                format!("{}<{}>", OPTIONAL, inner_ty)
+            },
             Maskoid::List(MaskoidElement { element: inner, .. }) => {
-                let index = self.tmp("i");
-                let element = self.tmp("e");
-                let v = self.tmp("v");
-                let body = self.decode(inner, hint, &element, &format!("{} + \"[\" + {} + \"]\"", path, index), &v);
-                let (collection, add) = match maskoid {
-                    Maskoid::Set(_) => (
-                        "java.util.LinkedHashSet",
-                        format!(
-                            "    if (!{out}.add({v})) {{\n        {exc}\n    }}\n",
-                            out = out,
-                            v = v,
-                            exc =
-                                exception(
-                                    "\"Duplicate element in set\"",
-                                    &format!("{} + \"[\" + {} + \"]\"", path, index)
-                                ),
-                        ),
-                    ),
-                    _ => ("java.util.ArrayList", format!("    {}.add({});\n", out, v)),
-                };
-                format!(
-                    "if (!{json}.isArray()) {{\n    {exc}\n}}\n{ty} {out} = new {collection}<>();\nint {index} = 0;\nfor (var {element} : {json}) {{\n{body}{add}    {index}++;\n}}\n",
-                    json = json,
-                    exc = exception("\"Expected an array\"", path),
-                    ty = ty,
-                    out = out,
-                    collection = collection,
-                    index = index,
-                    element = element,
-                    body = indent(&body, 1),
-                    add = add,
-                )
+                let inner_ty = self.type_of(inner, hint, true);
+                format!("java.util.List<{}>", inner_ty)
+            },
+            Maskoid::Set(MaskoidElement { element: inner, .. }) => {
+                let inner_ty = self.type_of(inner, hint, true);
+                format!("java.util.Set<{}>", inner_ty)
             },
             Maskoid::StringMap(MaskoidElement { element: inner, .. }) => {
-                let entry = self.tmp("e");
-                let v = self.tmp("v");
-                let body =
-                    self.decode(
-                        inner,
-                        hint,
-                        &format!("{}.getValue()", entry),
-                        &format!("{} + \".\" + {}.getKey()", path, entry),
-                        &v,
-                    );
-                format!(
-                    "if (!{json}.isObject()) {{\n    {exc}\n}}\n{ty} {out} = new java.util.LinkedHashMap<>();\nfor (var {entry} : {json}.properties()) {{\n{body}    {out}.put({entry}.getKey(), {v});\n}}\n",
-                    json = json,
-                    exc = exception("\"Expected an object\"", path),
-                    ty = ty,
-                    out = out,
-                    entry = entry,
-                    body = indent(&body, 1),
-                    v = v,
-                )
+                let inner_ty = self.type_of(inner, hint, true);
+                format!("java.util.Map<String, {}>", inner_ty)
             },
-            Maskoid::Tuple(_) | Maskoid::Record(_) | Maskoid::TaggedUnion(_) => {
-                let name = self.ensure_named(maskoid, hint);
-                format!("{} {} = {}Codec.fromValue({}, {});\n", ty, out, name, json, path)
-            },
+            Maskoid::Tuple(_) | Maskoid::Record(_) | Maskoid::TaggedUnion(_) => self.ensure_named(maskoid, hint),
         };
     }
 }
 
-struct RecordParts {
-    components: String,
-    encode: String,
-    decode: String,
-    ctor: String,
+fn exception(message: &str, path: &str) -> String {
+    return format!("throw new IllegalArgumentException({} + \" at \" + {});", message, path);
 }
 
-fn is_named(maskoid: &Maskoid) -> bool {
-    return matches!(maskoid, Maskoid::Record(_) | Maskoid::TaggedUnion(_) | Maskoid::Tuple(_));
-}
-
-fn indent(text: &str, levels: usize) -> String {
-    let pad = "    ".repeat(levels);
-    let mut out = String::new();
-    for line in text.lines() {
-        if line.is_empty() {
-            out.push('\n');
-        } else {
-            out.push_str(&pad);
-            out.push_str(line);
-            out.push('\n');
-        }
-    }
-    return out;
+fn field_path(path: &str, key: &str) -> String {
+    return format!("{} + {}", path, java_string(&format!(".{}", key)));
 }
 
 pub fn generate_java(schema: &SchemaskV1, config: &JavaConfig) -> Result<Vec<JavaFile>, crate::Invalid> {
@@ -982,4 +846,140 @@ pub fn generate_java(schema: &SchemaskV1, config: &JavaConfig) -> Result<Vec<Jav
     }
     codegen.files.sort_by(|a, b| a.path.cmp(&b.path));
     return Ok(codegen.files);
+}
+
+fn indent(text: &str, levels: usize) -> String {
+    let pad = "    ".repeat(levels);
+    let mut out = String::new();
+    for line in text.lines() {
+        if line.is_empty() {
+            out.push('\n');
+        } else {
+            out.push_str(&pad);
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    return out;
+}
+
+fn is_named(maskoid: &Maskoid) -> bool {
+    return matches!(maskoid, Maskoid::Record(_) | Maskoid::TaggedUnion(_) | Maskoid::Tuple(_));
+}
+
+fn java_string(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    return out;
+}
+
+pub struct JavaConfig {
+    pub package: String,
+}
+
+fn javadoc(desc: Option<&str>) -> String {
+    return match desc {
+        None => String::new(),
+        Some(d) => format!("/** {} */\n", d.replace("*/", "* /")),
+    };
+}
+
+pub struct JavaFile {
+    pub path: String,
+    pub source: String,
+}
+
+struct RecordParts {
+    components: String,
+    ctor: String,
+    decode: String,
+    encode: String,
+}
+
+fn to_java_ident(cased: String) -> String {
+    let reserved: &[&str] =
+        &[
+            "abstract",
+            "assert",
+            "boolean",
+            "break",
+            "byte",
+            "case",
+            "catch",
+            "char",
+            "class",
+            "const",
+            "continue",
+            "default",
+            "do",
+            "double",
+            "else",
+            "enum",
+            "extends",
+            "final",
+            "finally",
+            "float",
+            "for",
+            "goto",
+            "if",
+            "implements",
+            "import",
+            "instanceof",
+            "int",
+            "interface",
+            "long",
+            "native",
+            "new",
+            "package",
+            "private",
+            "protected",
+            "public",
+            "return",
+            "short",
+            "static",
+            "strictfp",
+            "super",
+            "switch",
+            "synchronized",
+            "this",
+            "throw",
+            "throws",
+            "transient",
+            "try",
+            "void",
+            "volatile",
+            "while",
+            "true",
+            "false",
+            "null",
+            "var",
+            "record",
+            "sealed",
+            "permits",
+            "yield",
+            "_",
+        ];
+    let mut out = String::new();
+    for c in cased.chars() {
+        if c.is_ascii_alphanumeric() || c == '_' {
+            out.push(c);
+        } else {
+            out.push('_');
+        }
+    }
+    if out.is_empty() || out.chars().next().unwrap().is_ascii_digit() || reserved.contains(&out.as_str()) {
+        out.insert(0, '_');
+    }
+    return out;
 }

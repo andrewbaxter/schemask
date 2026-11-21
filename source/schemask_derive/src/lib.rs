@@ -31,6 +31,94 @@ fn apply_desc(expr: TokenStream2, desc: Option<&str>) -> TokenStream2 {
     };
 }
 
+fn check_field_attrs(field: &syn::Field) -> Option<TokenStream2> {
+    if is_skipped(field) {
+        return None;
+    }
+    let target: &dyn quote::ToTokens = match &field.ident {
+        Some(i) => i,
+        None => &field.ty,
+    };
+    for key in ["skip_serializing", "skip_deserializing", "flatten", "with", "serialize_with", "deserialize_with"] {
+        if serde_has(&field.attrs, key) {
+            return Some(
+                syn::Error::new_spanned(
+                    target,
+                    format!(
+                        "Maskoidy does not support #[serde({})]: the serialized shape is not derivable from the field",
+                        key
+                    ),
+                ).to_compile_error(),
+            );
+        }
+    }
+    let is_option = match &field.ty {
+        Type::Path(p) => p.path.segments.last().map(|s| s.ident == "Option").unwrap_or(false),
+        _ => false,
+    };
+    if serde_has(&field.attrs, "skip_serializing_if") && !is_option {
+        return Some(
+            syn::Error::new_spanned(
+                target,
+                "Maskoidy only supports #[serde(skip_serializing_if)] on Option fields, which may be omitted; other fields are required",
+            ).to_compile_error(),
+        );
+    }
+    return check_type(&field.ty, false).map(|e| e.to_compile_error());
+}
+
+fn check_type(ty: &Type, in_option: bool) -> Option<syn::Error> {
+    let Type::Path(p) = ty else {
+        return match ty {
+            Type::Reference(r) => check_type(&r.elem, in_option),
+            Type::Array(a) => check_type(&a.elem, false),
+            Type::Slice(s) => check_type(&s.elem, false),
+            Type::Paren(p) => check_type(&p.elem, in_option),
+            Type::Group(g) => check_type(&g.elem, in_option),
+            Type::Tuple(t) => t.elems.iter().find_map(|e| check_type(e, false)),
+            _ => None,
+        };
+    };
+    let Some(last) = p.path.segments.last() else {
+        return None;
+    };
+    let name = last.ident.to_string();
+    let is_option = name == "Option";
+    let is_soption = name == "SOption";
+    if is_option && in_option {
+        return Some(
+            syn::Error::new_spanned(
+                ty,
+                "Option<Option<T>> is ambiguous in serde (None and Some(None) both serialize as null); use Option<SOption<T>> instead",
+            ),
+        );
+    }
+    if is_soption && !in_option {
+        return Some(
+            syn::Error::new_spanned(
+                ty,
+                "SOption<T> only has the right shape directly inside an Option (or another SOption); write Option<SOption<T>>",
+            ),
+        );
+    }
+    let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
+        return None;
+    };
+    let transparent = matches!(name.as_str(), "Box" | "Rc" | "Arc" | "Cow");
+    for arg in &args.args {
+        if let syn::GenericArgument::Type(t) = arg {
+            if let Some(e) = check_type(t, if transparent {
+                in_option
+            } else {
+                is_option || is_soption
+            }) {
+                return Some(e);
+            }
+        }
+    }
+    return None;
+}
+
 #[proc_macro_derive(Maskoidy)]
 pub fn derive_schematize(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -295,98 +383,6 @@ pub fn derive_schematize(input: TokenStream) -> TokenStream {
     }.into();
 }
 
-fn check_field_attrs(field: &syn::Field) -> Option<TokenStream2> {
-    if is_skipped(field) {
-        return None;
-    }
-    let target: &dyn quote::ToTokens = match &field.ident {
-        Some(i) => i,
-        None => &field.ty,
-    };
-    for key in ["skip_serializing", "skip_deserializing", "flatten", "with", "serialize_with", "deserialize_with"] {
-        if serde_has(&field.attrs, key) {
-            return Some(
-                syn::Error::new_spanned(
-                    target,
-                    format!(
-                        "Maskoidy does not support #[serde({})]: the serialized shape is not derivable from the field",
-                        key
-                    ),
-                ).to_compile_error(),
-            );
-        }
-    }
-    let is_option = match &field.ty {
-        Type::Path(p) => p.path.segments.last().map(|s| s.ident == "Option").unwrap_or(false),
-        _ => false,
-    };
-    if serde_has(&field.attrs, "skip_serializing_if") && !is_option {
-        return Some(
-            syn::Error::new_spanned(
-                target,
-                "Maskoidy only supports #[serde(skip_serializing_if)] on Option fields, which may be omitted; other fields are required",
-            ).to_compile_error(),
-        );
-    }
-    return check_type(&field.ty, false).map(|e| e.to_compile_error());
-}
-
-fn check_type(ty: &Type, in_option: bool) -> Option<syn::Error> {
-    let Type::Path(p) = ty else {
-        return match ty {
-            Type::Reference(r) => check_type(&r.elem, in_option),
-            Type::Array(a) => check_type(&a.elem, false),
-            Type::Slice(s) => check_type(&s.elem, false),
-            Type::Paren(p) => check_type(&p.elem, in_option),
-            Type::Group(g) => check_type(&g.elem, in_option),
-            Type::Tuple(t) => t.elems.iter().find_map(|e| check_type(e, false)),
-            _ => None,
-        };
-    };
-    let Some(last) = p.path.segments.last() else {
-        return None;
-    };
-    let name = last.ident.to_string();
-    let is_option = name == "Option";
-    let is_soption = name == "SOption";
-    if is_option && in_option {
-        return Some(
-            syn::Error::new_spanned(
-                ty,
-                "Option<Option<T>> is ambiguous in serde (None and Some(None) both serialize as null); use Option<SOption<T>> instead",
-            ),
-        );
-    }
-    if is_soption && !in_option {
-        return Some(
-            syn::Error::new_spanned(
-                ty,
-                "SOption<T> only has the right shape directly inside an Option (or another SOption); write Option<SOption<T>>",
-            ),
-        );
-    }
-    let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
-        return None;
-    };
-    let transparent = matches!(name.as_str(), "Box" | "Rc" | "Arc" | "Cow");
-    for arg in &args.args {
-        if let syn::GenericArgument::Type(t) = arg {
-            if let Some(e) = check_type(t, if transparent {
-                in_option
-            } else {
-                is_option || is_soption
-            }) {
-                return Some(e);
-            }
-        }
-    }
-    return None;
-}
-
-fn is_skipped(field: &syn::Field) -> bool {
-    return serde_has(&field.attrs, "skip");
-}
-
 fn extract_doc(attrs: &[Attribute]) -> Option<String> {
     let lines: Vec<String> = attrs.iter().filter_map(|attr| {
         if !attr.path().is_ident("doc") {
@@ -413,6 +409,10 @@ fn field_key(field: &syn::Field, rule: RenameRule) -> String {
         &field.attrs,
         "rename",
     ).unwrap_or_else(|| rule.apply_to_field(&unraw(field.ident.as_ref().unwrap())));
+}
+
+fn is_skipped(field: &syn::Field) -> bool {
+    return serde_has(&field.attrs, "skip");
 }
 
 fn lit_str_value(tt: &TokenTree) -> Option<String> {

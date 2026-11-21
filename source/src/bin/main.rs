@@ -18,10 +18,15 @@ pub struct Args {
     command: Command,
 }
 
+fn check(schema: &Schemask) -> Result<(), loga::Error> {
+    return schemask::check_schema(schema).map_err(|e| loga::err(format!("Schema is not well formed:\n{}", e)));
+}
+
 #[derive(Aargvark)]
 #[vark(break_help)]
 pub enum Command {
-    Check(CommandCheck),
+    /// Generate java code for serializing/deserializing a schemask. Outputs the code
+    /// to the specified directory. Requires `jackson` 2.15 or newer.
     GenerateJava(CommandGenerateJava),
     /// Generate markdown documentation for a schemask. Outputs the markdown to stdout.
     GenerateMarkdown(CommandGenerateMarkdown),
@@ -34,20 +39,18 @@ pub enum Command {
     SchemaskSchema,
     /// Validate a json file matches a schemask.
     Validate(CommandValidate),
-}
-
-#[derive(Aargvark)]
-pub struct CommandCheck {
-    schema: AargvarkJson<Schemask>,
+    /// Generate typescript definitions that match a schemask. Outputs the definitions
+    /// to stdout.
+    ValidateSchema(CommandValidateSchema),
 }
 
 #[derive(Aargvark)]
 pub struct CommandGenerateJava {
-    schema: AargvarkJson<Schemask>,
-    #[vark(flag = "--package")]
-    package: String,
     #[vark(flag = "--out")]
     out: std::path::PathBuf,
+    #[vark(flag = "--package")]
+    package: String,
+    schema: AargvarkJson<Schemask>,
 }
 
 #[derive(Aargvark)]
@@ -69,23 +72,24 @@ pub struct CommandGenerateTypescript {
 /// valid.
 #[derive(Aargvark)]
 pub struct CommandValidate {
-    schema: AargvarkJson<Schemask>,
     data: AargvarkJson<serde_json::Value>,
     #[vark(flag = "--root")]
     /// Override the root binding from the schema to use to validate the data (required
     /// if binding has no default root).
     root: Option<String>,
+    schema: AargvarkJson<Schemask>,
 }
 
-fn check(schema: &Schemask) -> Result<(), loga::Error> {
-    return schemask::check_schema(schema).map_err(|e| loga::err(format!("Schema is not well formed:\n{}", e)));
+#[derive(Aargvark)]
+pub struct CommandValidateSchema {
+    schema: AargvarkJson<Schemask>,
 }
 
 fn main() {
     match (|| {
         ta_return!((), loga::Error);
         match vark::<Args>().command {
-            Command::Check(c) => {
+            Command::ValidateSchema(c) => {
                 check(&c.schema.value)?;
                 println!("Ok");
             },

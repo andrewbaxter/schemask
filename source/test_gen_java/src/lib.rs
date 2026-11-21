@@ -1,16 +1,14 @@
 #[cfg(test)]
 mod tests {
-    use {
-        std::{
-            fs,
-            path::Path,
-            process::Command,
-            sync::{
-                OnceLock,
-                atomic::{
-                    AtomicUsize,
-                    Ordering,
-                },
+    use std::{
+        fs,
+        path::Path,
+        process::Command,
+        sync::{
+            OnceLock,
+            atomic::{
+                AtomicUsize,
+                Ordering,
             },
         },
     };
@@ -41,6 +39,58 @@ mod tests {
                 format!("{}{}{}", project.join("target/classes").display(), sep, fs::read_to_string(cp_file).unwrap()),
             );
         }).as_ref();
+    }
+
+    #[test]
+    fn invalid_rejected() {
+        let Some(classpath) = classpath() else {
+            return;
+        };
+        let schema = schema();
+        for (
+            binding,
+            input,
+        ) in [
+            ("Label", "42"),
+            ("Tags", r#"["a",1]"#),
+            ("Unique", "[1,1]"),
+            ("Meta", r#"{"k":1}"#),
+            ("Maybe", "7"),
+            ("Maybe", r#"{"value":7,"x":1}"#),
+            ("Coords", "[1.0]"),
+            (
+                "Account",
+                r#"{"active":true,"extra":null,"home":{"city":"Oslo"},"name":"Alice","tags":[],"type":"admin"}"#,
+            ),
+            ("Account", r#"{"active":true,"extra":null,"home":{"city":"Oslo"},"tags":[],"type":"user"}"#),
+            (
+                "Account",
+                r#"{"active":true,"extra":null,"home":{"city":"Oslo"},"name":"Alice","tags":[],"type":"user","nope":1}"#,
+            ),
+            (
+                "Account",
+                r#"{"active":true,"extra":null,"home":{"city":"Oslo"},"name":"Alice","score":"high","tags":[],"type":"user"}"#,
+            ),
+            ("Event", r#""Unknown""#),
+            ("Event", r#"{"Ping":1}"#),
+            ("Event", r#"{"Join":"x"}"#),
+            ("Event", r#"{"Join":{},"Ping":null}"#),
+            ("Event", r#""Ping" 1"#),
+            ("Shape", r#""circle""#),
+            ("Shape", r#"{"circle":{"radius":2,"x":1}}"#),
+            ("Foo", r#"{"bar_baz":{"y":2}}"#),
+            ("FooBar", r#"{"baz":{"x":1}}"#),
+        ] {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(input) {
+                assert!(
+                    schemask::validate(&schema, Some(binding.to_string()), &value).is_err(),
+                    "fixture for {} unexpectedly valid against the schema: {}",
+                    binding,
+                    input
+                );
+            }
+            assert!(round_trip(classpath, binding, input).is_err(), "{} {} should have been rejected", binding, input);
+        }
     }
 
     fn round_trip(classpath: &str, binding: &str, json: &str) -> Result<serde_json::Value, String> {
@@ -126,58 +176,6 @@ mod tests {
             schemask::validate(&schema, Some("Event".to_string()), &serde_json::from_str(input).unwrap()).unwrap();
             let got = round_trip(classpath, "Event", input).unwrap_or_else(|e| panic!("Event {}: {}", input, e));
             assert_eq!(got, serde_json::from_str::<serde_json::Value>(expected).unwrap(), "Event {}", input);
-        }
-    }
-
-    #[test]
-    fn invalid_rejected() {
-        let Some(classpath) = classpath() else {
-            return;
-        };
-        let schema = schema();
-        for (
-            binding,
-            input,
-        ) in [
-            ("Label", "42"),
-            ("Tags", r#"["a",1]"#),
-            ("Unique", "[1,1]"),
-            ("Meta", r#"{"k":1}"#),
-            ("Maybe", "7"),
-            ("Maybe", r#"{"value":7,"x":1}"#),
-            ("Coords", "[1.0]"),
-            (
-                "Account",
-                r#"{"active":true,"extra":null,"home":{"city":"Oslo"},"name":"Alice","tags":[],"type":"admin"}"#,
-            ),
-            ("Account", r#"{"active":true,"extra":null,"home":{"city":"Oslo"},"tags":[],"type":"user"}"#),
-            (
-                "Account",
-                r#"{"active":true,"extra":null,"home":{"city":"Oslo"},"name":"Alice","tags":[],"type":"user","nope":1}"#,
-            ),
-            (
-                "Account",
-                r#"{"active":true,"extra":null,"home":{"city":"Oslo"},"name":"Alice","score":"high","tags":[],"type":"user"}"#,
-            ),
-            ("Event", r#""Unknown""#),
-            ("Event", r#"{"Ping":1}"#),
-            ("Event", r#"{"Join":"x"}"#),
-            ("Event", r#"{"Join":{},"Ping":null}"#),
-            ("Event", r#""Ping" 1"#),
-            ("Shape", r#""circle""#),
-            ("Shape", r#"{"circle":{"radius":2,"x":1}}"#),
-            ("Foo", r#"{"bar_baz":{"y":2}}"#),
-            ("FooBar", r#"{"baz":{"x":1}}"#),
-        ] {
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(input) {
-                assert!(
-                    schemask::validate(&schema, Some(binding.to_string()), &value).is_err(),
-                    "fixture for {} unexpectedly valid against the schema: {}",
-                    binding,
-                    input
-                );
-            }
-            assert!(round_trip(classpath, binding, input).is_err(), "{} {} should have been rejected", binding, input);
         }
     }
 }
