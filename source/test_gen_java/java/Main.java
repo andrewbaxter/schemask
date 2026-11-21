@@ -1,6 +1,11 @@
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import gen.AccountCodec;
 import gen.CoordsCodec;
 import gen.EventCodec;
+import gen.FooBarCodec;
+import gen.FooCodec;
 import gen.LabelCodec;
 import gen.MaybeCodec;
 import gen.MetaCodec;
@@ -10,8 +15,6 @@ import gen.UniqueCodec;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import rt.json.Json;
-import rt.json.JsonValues;
 
 /**
  * Test driver: `Main BINDING FILE` decodes the json in FILE as BINDING, re-encodes it and prints
@@ -20,23 +23,31 @@ import rt.json.JsonValues;
 public final class Main {
     private Main() {}
 
+    private static final ObjectMapper MAPPER =
+            new ObjectMapper().enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+
     public static void main(String[] args) throws Exception {
         var text = Files.readString(Path.of(args[1]), StandardCharsets.UTF_8);
-        var root = Json.FieldPath.root();
-        var value = JsonValues.parse(text);
-        var out =
+        if (args[0].equals("Event")) {
+            // The default binding gets string round trip helpers; exercise those.
+            System.out.println(EventCodec.serialize(EventCodec.deserialize(text)));
+            return;
+        }
+        JsonNode value = MAPPER.readTree(text);
+        JsonNode out =
                 switch (args[0]) {
-                    case "Event" -> EventCodec.serialize(EventCodec.deserialize(text));
-                    case "Account" -> JsonValues.serialize(AccountCodec.toValue(AccountCodec.fromValue(value, root)));
-                    case "Coords" -> JsonValues.serialize(CoordsCodec.toValue(CoordsCodec.fromValue(value, root)));
-                    case "Label" -> JsonValues.serialize(LabelCodec.toValue(LabelCodec.fromValue(value, root)));
-                    case "Maybe" -> JsonValues.serialize(MaybeCodec.toValue(MaybeCodec.fromValue(value, root)));
-                    case "Meta" -> JsonValues.serialize(MetaCodec.toValue(MetaCodec.fromValue(value, root)));
-                    case "Shape" -> JsonValues.serialize(ShapeCodec.toValue(ShapeCodec.fromValue(value, root)));
-                    case "Tags" -> JsonValues.serialize(TagsCodec.toValue(TagsCodec.fromValue(value, root)));
-                    case "Unique" -> JsonValues.serialize(UniqueCodec.toValue(UniqueCodec.fromValue(value, root)));
+                    case "Account" -> AccountCodec.toValue(AccountCodec.fromValue(value));
+                    case "Coords" -> CoordsCodec.toValue(CoordsCodec.fromValue(value));
+                    case "Foo" -> FooCodec.toValue(FooCodec.fromValue(value));
+                    case "FooBar" -> FooBarCodec.toValue(FooBarCodec.fromValue(value));
+                    case "Label" -> LabelCodec.toValue(LabelCodec.fromValue(value));
+                    case "Maybe" -> MaybeCodec.toValue(MaybeCodec.fromValue(value));
+                    case "Meta" -> MetaCodec.toValue(MetaCodec.fromValue(value));
+                    case "Shape" -> ShapeCodec.toValue(ShapeCodec.fromValue(value));
+                    case "Tags" -> TagsCodec.toValue(TagsCodec.fromValue(value));
+                    case "Unique" -> UniqueCodec.toValue(UniqueCodec.fromValue(value));
                     default -> throw new IllegalArgumentException("Unknown binding " + args[0]);
                 };
-        System.out.println(out);
+        System.out.println(MAPPER.writeValueAsString(out));
     }
 }

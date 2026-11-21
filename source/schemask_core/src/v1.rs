@@ -46,7 +46,11 @@ mod tests {
     #[test]
     fn test_int() {
         pass(Maskoid::int(), json!(42));
+        pass(Maskoid::int(), json!(-42));
+        pass(Maskoid::int(), json!(i64::MAX));
         fail(Maskoid::int(), json!("hello"), &[]);
+        fail(Maskoid::int(), json!(1.5), &[]);
+        fail(Maskoid::int(), json!(u64::MAX), &[]);
     }
 
     #[test]
@@ -84,6 +88,59 @@ mod tests {
         let err = validate(&s, None, &json!(null)).expect_err("expected failure");
         assert_eq!(err.errors.len(), 1);
         assert_eq!(err.errors[0].path, &[] as &[PathSegment]);
+    }
+
+    #[test]
+    fn test_metadata() {
+        let md = json!({
+            "ui": "slider"
+        });
+        let m = Maskoid::int().with_metadata(md.clone());
+        assert_eq!(m.metadata(), Some(&md));
+        assert_eq!(Maskoid::int().metadata(), None);
+        pass(m.clone(), json!(1));
+        fail(m.clone(), json!("x"), &[]);
+        assert_eq!(serde_json::to_value(&m).unwrap(), json!({
+            "int": {
+                "metadata": {
+                    "ui": "slider"
+                }
+            }
+        }));
+        assert_eq!(serde_json::to_value(&Maskoid::int()).unwrap(), json!({
+            "int": {
+            }
+        }));
+        let decoded: Maskoid = serde_json::from_value(json!({
+            "option": {
+                "element": {
+                    "string": {
+                    }
+                },
+                "metadata":[1, 2]
+            }
+        })).unwrap();
+        assert_eq!(decoded.metadata(), Some(&json!([1, 2])));
+        let Maskoid::Option(MaskoidElement { element: inner, .. }) = &decoded else {
+            panic!()
+        };
+        assert!(matches!(**inner, Maskoid::String(_)));
+        for m in [
+            Maskoid::any(),
+            Maskoid::const_string("x"),
+            Maskoid::list(Maskoid::int()),
+            Maskoid::ref_("r"),
+            Maskoid::record(BTreeMap::new()),
+            Maskoid::tagged_union(BTreeMap::new()),
+            Maskoid::tuple(vec![]),
+        ] {
+            let m = m.with_metadata(md.clone());
+            assert_eq!(m.metadata(), Some(&md));
+            let encoded = serde_json::to_value(&m).unwrap();
+            assert_eq!(encoded.as_object().unwrap().values().next().unwrap()["metadata"], md);
+            let back: Maskoid = serde_json::from_value(encoded).unwrap();
+            assert_eq!(back.metadata(), Some(&md));
+        }
     }
 
     #[test]
@@ -174,6 +231,20 @@ mod tests {
         pass(Maskoid::set(Maskoid::int()), json!([1, 2, 3]));
         fail(Maskoid::set(Maskoid::int()), json!([1, "two", 3]), &[PathSegment::Index(1)]);
         fail(Maskoid::set(Maskoid::int()), json!([1, 2, 1]), &[PathSegment::Index(2)]);
+        pass(Maskoid::set(Maskoid::any()), json!([{
+            "a": 1,
+            "b": 2
+        }, {
+            "a": 1,
+            "b": 3
+        }]));
+        fail(Maskoid::set(Maskoid::any()), json!([{
+            "a": 1,
+            "b": 2
+        }, {
+            "b": 2,
+            "a": 1
+        }]), &[PathSegment::Index(1)]);
     }
 
     #[test]
@@ -247,6 +318,10 @@ pub trait Maskoidy {
     /// definition site. Non-derived implementations return `""`.
     fn schema_id() -> &'static str {
         return "";
+    }
+
+    fn is_plain_option() -> bool {
+        return false;
     }
 
     /// The name under which this type is registered as a binding during schema
@@ -336,9 +411,191 @@ impl Maskoidy for i8 {
 
 impl<T: Maskoidy> Maskoidy for Option<T> {
     fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
+        if T::is_plain_option() {
+            panic!(
+                "Option<Option<T>> is ambiguous in serde (None and Some(None) both serialize as null); use Option<SOption<T>> instead"
+            );
+        }
+        return Maskoid::option(T::maskoid(seen, bindings));
+    }
+
+    fn is_plain_option() -> bool {
+        return true;
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum SOption<T> {
+    None,
+    Some(T),
+}
+
+impl<T> SOption<T> {
+    pub fn as_option(&self) -> Option<&T> {
+        return match self {
+            SOption::None => None,
+            SOption::Some(v) => Some(v),
+        };
+    }
+
+    pub fn into_option(self) -> Option<T> {
+        return match self {
+            SOption::None => None,
+            SOption::Some(v) => Some(v),
+        };
+    }
+}
+
+impl<T> Default for SOption<T> {
+    fn default() -> Self {
+        return SOption::None;
+    }
+}
+
+impl<T> From<Option<T>> for SOption<T> {
+    fn from(value: Option<T>) -> Self {
+        return match value {
+            None => SOption::None,
+            Some(v) => SOption::Some(v),
+        };
+    }
+}
+
+impl<T> From<SOption<T>> for Option<T> {
+    fn from(value: SOption<T>) -> Self {
+        return value.into_option();
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SOptionRepr<T> {
+    element: Option<T>,
+}
+
+impl<T: Serialize> Serialize for SOption<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        return SOptionRepr { element: self.as_option() }.serialize(serializer);
+    }
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for SOption<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        return Ok(SOption::from(SOptionRepr::<T>::deserialize(deserializer)?.element));
+    }
+}
+
+impl<T: Maskoidy> Maskoidy for SOption<T> {
+    fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
+        if T::is_plain_option() {
+            panic!(
+                "SOption<Option<T>> is ambiguous in serde (SOption::None and SOption::Some(None) both serialize as {{\"element\": null}}); use SOption<SOption<T>> instead"
+            );
+        }
         return Maskoid::option(T::maskoid(seen, bindings));
     }
 }
+
+impl<T: Maskoidy + ?Sized> Maskoidy for &T {
+    fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
+        return T::maskoid(seen, bindings);
+    }
+
+    fn is_plain_option() -> bool {
+        return T::is_plain_option();
+    }
+}
+
+impl<T: Maskoidy> Maskoidy for std::rc::Rc<T> {
+    fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
+        return T::maskoid(seen, bindings);
+    }
+
+    fn is_plain_option() -> bool {
+        return T::is_plain_option();
+    }
+}
+
+impl<T: Maskoidy> Maskoidy for std::sync::Arc<T> {
+    fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
+        return T::maskoid(seen, bindings);
+    }
+
+    fn is_plain_option() -> bool {
+        return T::is_plain_option();
+    }
+}
+
+impl Maskoidy for str {
+    fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
+        return Maskoid::string();
+    }
+}
+
+impl Maskoidy for char {
+    fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
+        return Maskoid::string();
+    }
+}
+
+impl Maskoidy for std::path::PathBuf {
+    fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
+        return Maskoid::string();
+    }
+}
+
+impl Maskoidy for usize {
+    fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
+        return Maskoid::int();
+    }
+}
+
+impl Maskoidy for isize {
+    fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
+        return Maskoid::int();
+    }
+}
+
+impl<T: Maskoidy> Maskoidy for std::collections::HashSet<T> {
+    fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
+        return Maskoid::set(T::maskoid(seen, bindings));
+    }
+}
+
+impl<T: Maskoidy> Maskoidy for std::collections::BTreeSet<T> {
+    fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
+        return Maskoid::set(T::maskoid(seen, bindings));
+    }
+}
+
+impl<T: Maskoidy, const N: usize> Maskoidy for [T; N] {
+    fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
+        return Maskoid::list(T::maskoid(seen, bindings));
+    }
+}
+
+macro_rules! tuple_maskoidy{
+    ($($t: ident), +) => {
+        impl < $($t: Maskoidy),
+        +> Maskoidy for($($t,) +) {
+            fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
+                return Maskoid::tuple(vec![$(MaskoidField:: new($t:: maskoid(seen, bindings))), +]);
+            }
+        }
+    };
+}
+
+tuple_maskoidy!(A);
+
+tuple_maskoidy!(A, B);
+
+tuple_maskoidy!(A, B, C);
+
+tuple_maskoidy!(A, B, C, D);
+
+tuple_maskoidy!(A, B, C, D, E);
+
+tuple_maskoidy!(A, B, C, D, E, F);
 
 impl Maskoidy for serde_json::Value {
     fn maskoid(_seen: &mut HashSet<&'static str>, _bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
@@ -410,36 +667,21 @@ impl std::error::Error for Invalid { }
 #[derive(Serialize, Deserialize, Clone, Debug, Maskoidy)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum Maskoid {
-    /// Match any value without validation.
-    Any,
-    /// Match any bool.
-    Bool,
-    /// Must be exactly this string.
-    ConstString(String),
-    /// Match any float.
-    Float,
-    /// Match any integer.
-    Int,
-    /// Homogenous list where every element matches this maskoid. Preserves order.
-    List(Box<Maskoid>),
-    /// Match null.
-    Null,
-    /// The value may match the maskoid or it may be null. In a record, the associated
-    /// key may also be missing. If options are nested, the inner option is treated
-    /// like a single element record with the key "element".
-    Option(Box<Maskoid>),
+    Any(MaskoidPlain),
+    Bool(MaskoidPlain),
+    ConstString(MaskoidConstString),
+    Float(MaskoidPlain),
+    Int(MaskoidPlain),
+    List(MaskoidElement),
+    Null(MaskoidPlain),
+    Option(MaskoidElement),
     /// Each value is matched against the maskoid with the corresponding key. There's
     /// no match if there are extra elements or missing elements.
     Record(MaskoidRecord),
-    /// Match the maskoid in the root `bindings` map with this name.
-    Ref(String),
-    /// Homogenous set where every element matches this maskoid. Unordered, no
-    /// duplicates.
-    Set(Box<Maskoid>),
-    /// Match any string.
-    String,
-    /// Homogenous map where keys are strings and every value matches this maskoid.
-    StringMap(Box<Maskoid>),
+    Ref(MaskoidRef),
+    Set(MaskoidElement),
+    String(MaskoidPlain),
+    StringMap(MaskoidElement),
     /// Matches exactly one maskoid, based on a tag (the key). In json, this is encoded
     /// as a single key object `{KEY: ELEMENT}`.
     TaggedUnion(MaskoidTaggedUnion),
@@ -450,15 +692,18 @@ pub enum Maskoid {
 
 impl Maskoid {
     pub fn any() -> Self {
-        return Maskoid::Any;
+        return Maskoid::Any(MaskoidPlain { metadata: None });
     }
 
     pub fn bool() -> Self {
-        return Maskoid::Bool;
+        return Maskoid::Bool(MaskoidPlain { metadata: None });
     }
 
     pub fn const_string(value: impl Into<String>) -> Self {
-        return Maskoid::ConstString(value.into());
+        return Maskoid::ConstString(MaskoidConstString {
+            metadata: None,
+            value: value.into(),
+        });
     }
 
     pub fn description(&self) -> Option<&str> {
@@ -471,51 +716,104 @@ impl Maskoid {
     }
 
     pub fn float() -> Self {
-        return Maskoid::Float;
+        return Maskoid::Float(MaskoidPlain { metadata: None });
     }
 
     pub fn int() -> Self {
-        return Maskoid::Int;
+        return Maskoid::Int(MaskoidPlain { metadata: None });
     }
 
     pub fn list(inner: Maskoid) -> Self {
-        return Maskoid::List(Box::new(inner));
+        return Maskoid::List(MaskoidElement {
+            metadata: None,
+            element: Box::new(inner),
+        });
+    }
+
+    pub fn metadata(&self) -> Option<&serde_json::Value> {
+        return match self {
+            Maskoid::Any(m) |
+            Maskoid::Bool(m) |
+            Maskoid::Float(m) |
+            Maskoid::Int(m) |
+            Maskoid::Null(m) |
+            Maskoid::String(m) => m
+                .metadata
+                .as_ref(),
+            Maskoid::ConstString(m) => m.metadata.as_ref(),
+            Maskoid::List(m) | Maskoid::Option(m) | Maskoid::Set(m) | Maskoid::StringMap(m) => m.metadata.as_ref(),
+            Maskoid::Record(m) => m.metadata.as_ref(),
+            Maskoid::Ref(m) => m.metadata.as_ref(),
+            Maskoid::TaggedUnion(m) => m.metadata.as_ref(),
+            Maskoid::Tuple(m) => m.metadata.as_ref(),
+        };
+    }
+
+    pub fn metadata_mut(&mut self) -> &mut Option<serde_json::Value> {
+        return match self {
+            Maskoid::Any(m) |
+            Maskoid::Bool(m) |
+            Maskoid::Float(m) |
+            Maskoid::Int(m) |
+            Maskoid::Null(m) |
+            Maskoid::String(m) => &mut m.metadata,
+            Maskoid::ConstString(m) => &mut m.metadata,
+            Maskoid::List(m) | Maskoid::Option(m) | Maskoid::Set(m) | Maskoid::StringMap(m) => &mut m.metadata,
+            Maskoid::Record(m) => &mut m.metadata,
+            Maskoid::Ref(m) => &mut m.metadata,
+            Maskoid::TaggedUnion(m) => &mut m.metadata,
+            Maskoid::Tuple(m) => &mut m.metadata,
+        };
     }
 
     pub fn null() -> Self {
-        return Maskoid::Null;
+        return Maskoid::Null(MaskoidPlain { metadata: None });
     }
 
     pub fn option(inner: Maskoid) -> Self {
-        return Maskoid::Option(Box::new(inner));
+        return Maskoid::Option(MaskoidElement {
+            metadata: None,
+            element: Box::new(inner),
+        });
     }
 
     pub fn record(fields: BTreeMap<String, MaskoidField>) -> Self {
         return Maskoid::Record(MaskoidRecord {
             description: None,
+            metadata: None,
             fields: fields,
         });
     }
 
     pub fn ref_(name: impl Into<String>) -> Self {
-        return Maskoid::Ref(name.into());
+        return Maskoid::Ref(MaskoidRef {
+            metadata: None,
+            name: name.into(),
+        });
     }
 
     pub fn set(inner: Maskoid) -> Self {
-        return Maskoid::Set(Box::new(inner));
+        return Maskoid::Set(MaskoidElement {
+            metadata: None,
+            element: Box::new(inner),
+        });
     }
 
     pub fn string() -> Self {
-        return Maskoid::String;
+        return Maskoid::String(MaskoidPlain { metadata: None });
     }
 
     pub fn string_map(inner: Maskoid) -> Self {
-        return Maskoid::StringMap(Box::new(inner));
+        return Maskoid::StringMap(MaskoidElement {
+            metadata: None,
+            element: Box::new(inner),
+        });
     }
 
     pub fn tagged_union(variants: BTreeMap<String, MaskoidField>) -> Self {
         return Maskoid::TaggedUnion(MaskoidTaggedUnion {
             description: None,
+            metadata: None,
             variants: variants,
         });
     }
@@ -523,6 +821,7 @@ impl Maskoid {
     pub fn tuple(elements: Vec<MaskoidField>) -> Self {
         return Maskoid::Tuple(MaskoidTuple {
             description: None,
+            metadata: None,
             elements: elements,
         });
     }
@@ -537,6 +836,27 @@ impl Maskoid {
         }
         return self;
     }
+
+    pub fn with_metadata(mut self, metadata: serde_json::Value) -> Self {
+        *self.metadata_mut() = Some(metadata);
+        return self;
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Maskoidy)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct MaskoidConstString {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub metadata: Option<serde_json::Value>,
+    pub value: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Maskoidy)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct MaskoidElement {
+    pub element: Box<Maskoid>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub metadata: Option<serde_json::Value>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Maskoidy)]
@@ -566,6 +886,8 @@ impl MaskoidField {
 pub struct MaskoidRecord {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub metadata: Option<serde_json::Value>,
     pub fields: BTreeMap<String, MaskoidField>,
 }
 
@@ -574,6 +896,8 @@ pub struct MaskoidRecord {
 pub struct MaskoidTaggedUnion {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub metadata: Option<serde_json::Value>,
     pub variants: BTreeMap<String, MaskoidField>,
 }
 
@@ -582,7 +906,24 @@ pub struct MaskoidTaggedUnion {
 pub struct MaskoidTuple {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub metadata: Option<serde_json::Value>,
     pub elements: Vec<MaskoidField>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Maskoidy)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct MaskoidPlain {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub metadata: Option<serde_json::Value>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Maskoidy)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct MaskoidRef {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub metadata: Option<serde_json::Value>,
+    pub name: String,
 }
 
 pub fn match_maskoid(
@@ -593,7 +934,7 @@ pub fn match_maskoid(
     errors: &mut Vec<ValidationError>,
 ) {
     match maskoid {
-        Maskoid::Null => {
+        Maskoid::Null(_) => {
             if !data.is_null() {
                 errors.push(ValidationError {
                     path: path.clone(),
@@ -601,7 +942,7 @@ pub fn match_maskoid(
                 });
             }
         },
-        Maskoid::String => {
+        Maskoid::String(_) => {
             if !data.is_string() {
                 errors.push(ValidationError {
                     path: path.clone(),
@@ -609,7 +950,7 @@ pub fn match_maskoid(
                 });
             }
         },
-        Maskoid::ConstString(value) => {
+        Maskoid::ConstString(MaskoidConstString { value, .. }) => {
             match data.as_str() {
                 Some(s) if s == value => { },
                 Some(s) => {
@@ -626,7 +967,7 @@ pub fn match_maskoid(
                 },
             }
         },
-        Maskoid::Bool => {
+        Maskoid::Bool(_) => {
             if !data.is_boolean() {
                 errors.push(ValidationError {
                     path: path.clone(),
@@ -634,15 +975,19 @@ pub fn match_maskoid(
                 });
             }
         },
-        Maskoid::Int => {
-            if !data.is_i64() && !data.is_u64() {
+        Maskoid::Int(_) => {
+            if !data.is_i64() {
                 errors.push(ValidationError {
                     path: path.clone(),
-                    message: format!("Expected int, got {}", type_name(data)),
+                    message: if data.is_u64() {
+                        format!("Expected int within the i64 range, got {}", data)
+                    } else {
+                        format!("Expected int, got {}", type_name(data))
+                    },
                 });
             }
         },
-        Maskoid::Float => {
+        Maskoid::Float(_) => {
             if !data.is_number() {
                 errors.push(ValidationError {
                     path: path.clone(),
@@ -650,8 +995,8 @@ pub fn match_maskoid(
                 });
             }
         },
-        Maskoid::Any => { },
-        Maskoid::Ref(name) => {
+        Maskoid::Any(_) => { },
+        Maskoid::Ref(MaskoidRef { name, .. }) => {
             match schema.bindings.get(name) {
                 Some(inner) => {
                     match_maskoid(schema, inner, data, path, errors);
@@ -664,7 +1009,7 @@ pub fn match_maskoid(
                 },
             }
         },
-        Maskoid::Option(inner) => {
+        Maskoid::Option(MaskoidElement { element: inner, .. }) => {
             if !data.is_null() {
                 // Nested options are encoded as {"element": ...} per spec
                 if matches!(inner.as_ref(), Maskoid::Option(_)) {
@@ -698,7 +1043,7 @@ pub fn match_maskoid(
                 }
             }
         },
-        Maskoid::Set(inner) => {
+        Maskoid::Set(MaskoidElement { element: inner, .. }) => {
             match data.as_array() {
                 Some(arr) => {
                     for (i, elem) in arr.iter().enumerate() {
@@ -706,16 +1051,20 @@ pub fn match_maskoid(
                         match_maskoid(schema, inner, elem, path, errors);
                         path.pop();
                     }
-                    for i in 0 .. arr.len() {
-                        for j in (i + 1) .. arr.len() {
-                            if arr[i] == arr[j] {
+                    let mut first_seen_at = std::collections::HashMap::new();
+                    for (j, elem) in arr.iter().enumerate() {
+                        match first_seen_at.entry(elem.to_string()) {
+                            std::collections::hash_map::Entry::Vacant(e) => {
+                                e.insert(j);
+                            },
+                            std::collections::hash_map::Entry::Occupied(e) => {
                                 path.push(PathSegment::Index(j));
                                 errors.push(ValidationError {
                                     path: path.clone(),
-                                    message: format!("Duplicate element (also at index {})", i),
+                                    message: format!("Duplicate element (also at index {})", e.get()),
                                 });
                                 path.pop();
-                            }
+                            },
                         }
                     }
                 },
@@ -727,7 +1076,7 @@ pub fn match_maskoid(
                 },
             }
         },
-        Maskoid::List(inner) => {
+        Maskoid::List(MaskoidElement { element: inner, .. }) => {
             match data.as_array() {
                 Some(arr) => {
                     for (i, elem) in arr.iter().enumerate() {
@@ -744,7 +1093,7 @@ pub fn match_maskoid(
                 },
             }
         },
-        Maskoid::StringMap(inner) => {
+        Maskoid::StringMap(MaskoidElement { element: inner, .. }) => {
             match data.as_object() {
                 Some(obj) => {
                     for (k, v) in obj {
@@ -792,7 +1141,7 @@ pub fn match_maskoid(
         Maskoid::TaggedUnion(m) => {
             if let Some(tag) = data.as_str() {
                 match m.variants.get(tag) {
-                    Some(variant) if matches!(variant.maskoid, Maskoid::Null) => { },
+                    Some(variant) if matches!(variant.maskoid, Maskoid::Null(_)) => { },
                     Some(_) => {
                         errors.push(ValidationError {
                             path: path.clone(),
@@ -943,6 +1292,80 @@ fn type_name(v: &serde_json::Value) -> &'static str {
         serde_json::Value::String(_) => "string",
         serde_json::Value::Array(_) => "array",
         serde_json::Value::Object(_) => "object",
+    };
+}
+
+pub fn check_schema(schema: &SchemaskV1) -> Result<(), Invalid> {
+    fn walk(
+        schema: &SchemaskV1,
+        maskoid: &Maskoid,
+        path: &mut Vec<PathSegment>,
+        errors: &mut Vec<ValidationError>,
+    ) {
+        match maskoid {
+            Maskoid::Any(_) |
+            Maskoid::Bool(_) |
+            Maskoid::ConstString(_) |
+            Maskoid::Float(_) |
+            Maskoid::Int(_) |
+            Maskoid::Null(_) |
+            Maskoid::String(_) => {
+            },
+            Maskoid::Ref(MaskoidRef { name, .. }) => {
+                if !schema.bindings.contains_key(name) {
+                    errors.push(ValidationError {
+                        path: path.clone(),
+                        message: format!("Ref to undefined binding '{}'", name),
+                    });
+                }
+            },
+            Maskoid::List(MaskoidElement { element: inner, .. }) |
+            Maskoid::Option(MaskoidElement { element: inner, .. }) |
+            Maskoid::Set(MaskoidElement { element: inner, .. }) |
+            Maskoid::StringMap(MaskoidElement { element: inner, .. }) => {
+                walk(schema, inner, path, errors);
+            },
+            Maskoid::Record(m) => {
+                for (k, f) in &m.fields {
+                    path.push(PathSegment::Key(k.clone()));
+                    walk(schema, &f.maskoid, path, errors);
+                    path.pop();
+                }
+            },
+            Maskoid::TaggedUnion(m) => {
+                for (k, f) in &m.variants {
+                    path.push(PathSegment::Key(k.clone()));
+                    walk(schema, &f.maskoid, path, errors);
+                    path.pop();
+                }
+            },
+            Maskoid::Tuple(m) => {
+                for (i, f) in m.elements.iter().enumerate() {
+                    path.push(PathSegment::Index(i));
+                    walk(schema, &f.maskoid, path, errors);
+                    path.pop();
+                }
+            },
+        }
+    }
+
+    let mut errors = vec![];
+    if let Some(default) = &schema.default {
+        if !schema.bindings.contains_key(default) {
+            errors.push(ValidationError {
+                path: vec![],
+                message: format!("Default binding '{}' not found in schema", default),
+            });
+        }
+    }
+    for (name, maskoid) in &schema.bindings {
+        let mut path = vec![PathSegment::Key(name.clone())];
+        walk(schema, maskoid, &mut path, &mut errors);
+    }
+    return if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(Invalid { errors: errors })
     };
 }
 

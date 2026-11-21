@@ -5,6 +5,7 @@ members = ["schemask_core", "schemask_derive", "schemask_from", "test_gen_rust",
 name = "schemask"
 version = "0.1.6"
 edition = "2024"
+rust-version = "1.88"
 license = "ISC"
 repository = "https://github.com/andrewbaxter/schemask"
 readme = "../readme.md"

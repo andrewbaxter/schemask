@@ -15,18 +15,32 @@ pub use {
     v1::{
         Invalid,
         Maskoid,
+        MaskoidConstString,
+        MaskoidElement,
         MaskoidField,
+        MaskoidPlain,
         MaskoidRecord,
+        MaskoidRef,
         MaskoidTaggedUnion,
         MaskoidTuple,
         Maskoidy,
         PathSegment,
+        SOption,
         ValidationError,
     },
     v1 as latest,
 };
 
-pub fn generate_java(schema: &Schemask, config: &gen_java::JavaConfig) -> Vec<gen_java::JavaFile> {
+pub fn check_schema(schema: &Schemask) -> Result<(), v1::Invalid> {
+    return match schema {
+        Schemask::V1(s) => v1::check_schema(s),
+    };
+}
+
+pub fn generate_java(
+    schema: &Schemask,
+    config: &gen_java::JavaConfig,
+) -> Result<Vec<gen_java::JavaFile>, v1::Invalid> {
     return match schema {
         Schemask::V1(s) => gen_java::generate_java(s, config),
     };

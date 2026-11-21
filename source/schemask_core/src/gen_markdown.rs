@@ -1,7 +1,12 @@
 use {
     crate::{
         Maskoid,
-        v1::SchemaskV1,
+        v1::{
+            MaskoidConstString,
+            MaskoidElement,
+            MaskoidRef,
+            SchemaskV1,
+        },
     },
     serde_json,
     std::fmt::Write,
@@ -34,8 +39,8 @@ pub fn generate_markdown(schema: &SchemaskV1) -> String {
                 let mut sorted: Vec<_> = u.variants.iter().collect();
                 sorted.sort_by_key(|(k, _)| k.as_str());
                 for (vname, variant) in sorted {
-                    let ty = match variant.maskoid {
-                        Maskoid::Null => md_escape(&serde_json::to_string(vname.as_str()).unwrap()),
+                    let ty = match &variant.maskoid {
+                        Maskoid::Null(_) => md_escape(&serde_json::to_string(vname.as_str()).unwrap()),
                         _ => md_escape(&md_type(&variant.maskoid)),
                     };
                     let desc = md_escape(variant.description.as_deref().unwrap_or(""));
@@ -55,18 +60,18 @@ fn md_escape(s: &str) -> String {
 
 fn md_type(maskoid: &Maskoid) -> String {
     return match maskoid {
-        Maskoid::Null => "null".to_string(),
-        Maskoid::Any => "any".to_string(),
-        Maskoid::String => "string".to_string(),
-        Maskoid::ConstString(v) => serde_json::to_string(v.as_str()).unwrap(),
-        Maskoid::Bool => "boolean".to_string(),
-        Maskoid::Int => "integer".to_string(),
-        Maskoid::Float => "number".to_string(),
-        Maskoid::Ref(name) => format!("[{name}](#{name})", name = name.to_lowercase()),
-        Maskoid::Option(inner) => format!("{} | null", md_type(inner)),
-        Maskoid::Set(inner) => format!("Set<{}>", md_type(inner)),
-        Maskoid::List(inner) => format!("Array<{}>", md_type(inner)),
-        Maskoid::StringMap(inner) => format!("Record<string, {}>", md_type(inner)),
+        Maskoid::Null(_) => "null".to_string(),
+        Maskoid::Any(_) => "any".to_string(),
+        Maskoid::String(_) => "string".to_string(),
+        Maskoid::ConstString(MaskoidConstString { value: v, .. }) => serde_json::to_string(v.as_str()).unwrap(),
+        Maskoid::Bool(_) => "boolean".to_string(),
+        Maskoid::Int(_) => "integer".to_string(),
+        Maskoid::Float(_) => "number".to_string(),
+        Maskoid::Ref(MaskoidRef { name, .. }) => format!("[{name}](#{name})", name = name.to_lowercase()),
+        Maskoid::Option(MaskoidElement { element: inner, .. }) => format!("{} | null", md_type(inner)),
+        Maskoid::Set(MaskoidElement { element: inner, .. }) => format!("Set<{}>", md_type(inner)),
+        Maskoid::List(MaskoidElement { element: inner, .. }) => format!("Array<{}>", md_type(inner)),
+        Maskoid::StringMap(MaskoidElement { element: inner, .. }) => format!("Record<string, {}>", md_type(inner)),
         Maskoid::Tuple(t) => {
             let types: Vec<String> = t.elements.iter().map(|f| md_type(&f.maskoid)).collect();
             return format!("[{}]", types.join(", "));

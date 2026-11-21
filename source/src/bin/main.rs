@@ -21,6 +21,7 @@ pub struct Args {
 #[derive(Aargvark)]
 #[vark(break_help)]
 pub enum Command {
+    Check(CommandCheck),
     GenerateJava(CommandGenerateJava),
     /// Generate markdown documentation for a schemask. Outputs the markdown to stdout.
     GenerateMarkdown(CommandGenerateMarkdown),
@@ -36,14 +37,15 @@ pub enum Command {
 }
 
 #[derive(Aargvark)]
+pub struct CommandCheck {
+    schema: AargvarkJson<Schemask>,
+}
+
+#[derive(Aargvark)]
 pub struct CommandGenerateJava {
     schema: AargvarkJson<Schemask>,
     #[vark(flag = "--package")]
     package: String,
-    #[vark(flag = "--runtime-package")]
-    runtime_package: String,
-    #[vark(flag = "--prelude-package")]
-    prelude_package: String,
     #[vark(flag = "--out")]
     out: std::path::PathBuf,
 }
@@ -67,39 +69,53 @@ pub struct CommandGenerateTypescript {
 /// valid.
 #[derive(Aargvark)]
 pub struct CommandValidate {
+    schema: AargvarkJson<Schemask>,
     data: AargvarkJson<serde_json::Value>,
+    #[vark(flag = "--root")]
     /// Override the root binding from the schema to use to validate the data (required
     /// if binding has no default root).
     root: Option<String>,
-    schema: AargvarkJson<Schemask>,
+}
+
+fn check(schema: &Schemask) -> Result<(), loga::Error> {
+    return schemask::check_schema(schema).map_err(|e| loga::err(format!("Schema is not well formed:\n{}", e)));
 }
 
 fn main() {
     match (|| {
         ta_return!((), loga::Error);
         match vark::<Args>().command {
+            Command::Check(c) => {
+                check(&c.schema.value)?;
+                println!("Ok");
+            },
             Command::Validate(c) => {
+                check(&c.schema.value)?;
                 schemask::validate(&c.schema.value, c.root, &c.data.value).map_err(|e| loga::err(e.to_string()))?;
                 println!("Valid");
             },
             Command::GenerateJava(c) => {
-                for file in schemask::generate_java(&c.schema.value, &schemask::gen_java::JavaConfig {
-                    package: c.package,
-                    runtime_package: c.runtime_package,
-                    prelude_package: c.prelude_package,
-                }) {
+                let files =
+                    schemask::generate_java(
+                        &c.schema.value,
+                        &schemask::gen_java::JavaConfig { package: c.package },
+                    ).map_err(|e| loga::err(format!("Schema is not well formed:\n{}", e)))?;
+                for file in files {
                     let path = c.out.join(&file.path);
                     std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| loga::err(e.to_string()))?;
                     std::fs::write(&path, file.source).map_err(|e| loga::err(e.to_string()))?;
                 }
             },
             Command::GenerateRust(c) => {
+                check(&c.schema.value)?;
                 print!("{}", schemask::generate_rust(&c.schema.value));
             },
             Command::GenerateTypescript(c) => {
+                check(&c.schema.value)?;
                 print!("{}", schemask::generate_typescript(&c.schema.value));
             },
             Command::GenerateMarkdown(c) => {
+                check(&c.schema.value)?;
                 print!("{}", schemask::generate_markdown(&c.schema.value));
             },
             Command::SchemaskSchema => {

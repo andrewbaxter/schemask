@@ -19,7 +19,12 @@ fn main() {
         bindings.insert("Tags".to_string(), Maskoid::list(Maskoid::string()));
         bindings.insert("Unique".to_string(), Maskoid::set(Maskoid::int()));
         bindings.insert("Meta".to_string(), Maskoid::string_map(Maskoid::string()));
-        bindings.insert("Maybe".to_string(), Maskoid::option(Maskoid::option(Maskoid::int())));
+        bindings.insert(
+            "Maybe".to_string(),
+            Maskoid::option(Maskoid::option(Maskoid::int()).with_metadata(serde_json::json!({
+                "for": "external tooling"
+            }))),
+        );
         bindings.insert(
             "Coords".to_string(),
             Maskoid::tuple(vec![MaskoidField::new(Maskoid::float()), MaskoidField::new(Maskoid::float())]),
@@ -29,7 +34,12 @@ fn main() {
             f.insert("name".to_string(), MaskoidField::new(Maskoid::ref_("Label")));
             f.insert("type".to_string(), MaskoidField::new(Maskoid::const_string("user")));
             f.insert("avatar-url".to_string(), MaskoidField::new(Maskoid::option(Maskoid::string())));
-            f.insert("score".to_string(), MaskoidField::new(Maskoid::option(Maskoid::int())));
+            f.insert(
+                "score".to_string(),
+                MaskoidField::new(Maskoid::option(Maskoid::int()).with_metadata(serde_json::json!({
+                    "for": "external tooling"
+                }))),
+            );
             f.insert("active".to_string(), MaskoidField::new(Maskoid::bool()));
             f.insert("tags".to_string(), MaskoidField::new(Maskoid::ref_("Tags")));
             f.insert("extra".to_string(), MaskoidField::new(Maskoid::any()));
@@ -44,7 +54,9 @@ fn main() {
             let mut v = BTreeMap::new();
             v.insert("Join".to_string(), MaskoidField::new(Maskoid::ref_("Account")));
             v.insert("user_left".to_string(), MaskoidField::new(Maskoid::ref_("Label")));
-            v.insert("Ping".to_string(), MaskoidField::new(Maskoid::null()));
+            v.insert("Ping".to_string(), MaskoidField::new(Maskoid::null().with_metadata(serde_json::json!({
+                "for": "external tooling"
+            }))));
             v.insert("Moved".to_string(), MaskoidField::new(Maskoid::ref_("Coords")));
             v
         }));
@@ -58,6 +70,19 @@ fn main() {
             v.insert("named".to_string(), MaskoidField::new(Maskoid::ref_("Label")));
             v
         }));
+        let anon = |k: &str, inner: &str| Maskoid::record({
+            let mut f = BTreeMap::new();
+            f.insert(k.to_string(), MaskoidField::new(Maskoid::record({
+                let mut g = BTreeMap::new();
+                g.insert(inner.to_string(), MaskoidField::new(Maskoid::int()));
+                g
+            })));
+            f
+        });
+        bindings.insert("Foo".to_string(), anon("bar_baz", "x").with_metadata(serde_json::json!({
+            "for": "external tooling"
+        })));
+        bindings.insert("FooBar".to_string(), anon("baz", "y"));
         return schemask::latest::SchemaskV1 {
             bindings: bindings,
             default: Some("Event".to_string()),
@@ -67,18 +92,21 @@ fn main() {
     let out = Path::new(&out_dir);
     let versioned = schema.to_versioned();
     fs::write(out.join("schema.json"), serde_json::to_string_pretty(&versioned).unwrap()).unwrap();
-    let java = out.join("java");
-    if java.exists() {
-        fs::remove_dir_all(&java).unwrap();
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let maven = out.join("maven");
+    let sources = maven.join("src/main/java");
+    if sources.exists() {
+        fs::remove_dir_all(&sources).unwrap();
     }
-    for file in generate_java(&versioned, &JavaConfig {
-        package: "gen".to_string(),
-        runtime_package: "rt.json".to_string(),
-        prelude_package: "rt.util".to_string(),
-    }) {
-        let path = java.join(&file.path);
+    fs::create_dir_all(&sources).unwrap();
+    fs::copy(manifest.join("pom.xml"), maven.join("pom.xml")).unwrap();
+    fs::copy(manifest.join("java/Main.java"), sources.join("Main.java")).unwrap();
+    for file in generate_java(&versioned, &JavaConfig { package: "gen".to_string() }).unwrap() {
+        let path = sources.join(&file.path);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, file.source).unwrap();
     }
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=pom.xml");
+    println!("cargo:rerun-if-changed=java/Main.java");
 }

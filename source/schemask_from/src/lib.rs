@@ -45,6 +45,14 @@ pub fn from_schemask(input: TokenStream) -> TokenStream {
                 .into();
         },
     };
+    if let Err(e) = schemask_core::check_schema(&schema) {
+        return syn::Error::new(
+            lit.span(),
+            format!("from_schemask!: schema file {} is not well formed: {}", path.display(), e),
+        )
+            .to_compile_error()
+            .into();
+    }
     let types = schemask_core::generate_rust_tokens(&schema);
     let path_str = path.to_string_lossy();
     return quote!{

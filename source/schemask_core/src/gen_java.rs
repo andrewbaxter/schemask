@@ -2,7 +2,12 @@ use {
     crate::{
         Maskoid,
         MaskoidField,
-        v1::SchemaskV1,
+        v1::{
+            MaskoidConstString,
+            MaskoidElement,
+            MaskoidRef,
+            SchemaskV1,
+        },
     },
     heck::{
         ToLowerCamelCase,
@@ -21,9 +26,13 @@ pub struct JavaFile {
 
 pub struct JavaConfig {
     pub package: String,
-    pub runtime_package: String,
-    pub prelude_package: String,
 }
+
+const JSON_NODE: &str = "com.fasterxml.jackson.databind.JsonNode";
+const NODE_FACTORY: &str = "com.fasterxml.jackson.databind.node.JsonNodeFactory.instance";
+const OBJECT_NODE: &str = "com.fasterxml.jackson.databind.node.ObjectNode";
+const ARRAY_NODE: &str = "com.fasterxml.jackson.databind.node.ArrayNode";
+const OPTIONAL: &str = "java.util.Optional";
 
 fn to_java_ident(cased: String) -> String {
     let reserved: &[&str] =
@@ -126,10 +135,20 @@ fn javadoc(desc: Option<&str>) -> String {
     };
 }
 
+fn exception(message: &str, path: &str) -> String {
+    return format!("throw new IllegalArgumentException({} + \" at \" + {});", message, path);
+}
+
+fn field_path(path: &str, key: &str) -> String {
+    return format!("{} + {}", path, java_string(&format!(".{}", key)));
+}
+
 struct CodeGen<'a> {
     schema: &'a SchemaskV1,
     config: &'a JavaConfig,
     files: Vec<JavaFile>,
+    names: BTreeMap<String, String>,
+    used: BTreeSet<String>,
     generated: BTreeSet<String>,
     counter: usize,
 }
@@ -140,39 +159,47 @@ impl<'a> CodeGen<'a> {
         return format!("__{}{}", base, self.counter);
     }
 
-    fn rt(&self, name: &str) -> String {
-        return format!("{}.{}", self.config.runtime_package, name);
+    fn fresh(&mut self, hint: &str) -> String {
+        let mut name = hint.to_string();
+        let mut i = 2;
+        while !self.used.insert(name.clone()) {
+            name = format!("{}{}", hint, i);
+            i += 1;
+        }
+        return name;
     }
 
-    fn pre(&self, name: &str) -> String {
-        return format!("{}.{}", self.config.prelude_package, name);
-    }
-
-    fn exception(&self, message: &str, path: &str) -> String {
-        return format!("throw new {}.DeserializationException({}, {});", self.rt("Json"), message, path);
+    fn name_for(&mut self, maskoid: &Maskoid, hint: &str) -> String {
+        let key = format!("{}\0{}", hint, serde_json::to_string(maskoid).unwrap());
+        if let Some(name) = self.names.get(&key) {
+            return name.clone();
+        }
+        let name = self.fresh(hint);
+        self.names.insert(key, name.clone());
+        return name;
     }
 
     fn type_of(&mut self, maskoid: &Maskoid, hint: &str, boxed: bool) -> String {
         return match maskoid {
-            Maskoid::Null => self.rt("JsonValueNull"),
-            Maskoid::String | Maskoid::ConstString(_) => "String".to_string(),
-            Maskoid::Bool => if boxed {
+            Maskoid::Null(_) => "Void".to_string(),
+            Maskoid::String(_) | Maskoid::ConstString(_) => "String".to_string(),
+            Maskoid::Bool(_) => if boxed {
                 "Boolean".to_string()
             } else {
                 "boolean".to_string()
             },
-            Maskoid::Int => if boxed {
+            Maskoid::Int(_) => if boxed {
                 "Long".to_string()
             } else {
                 "long".to_string()
             },
-            Maskoid::Float => if boxed {
+            Maskoid::Float(_) => if boxed {
                 "Double".to_string()
             } else {
                 "double".to_string()
             },
-            Maskoid::Any => self.rt("JsonValue"),
-            Maskoid::Ref(name) => {
+            Maskoid::Any(_) => JSON_NODE.to_string(),
+            Maskoid::Ref(MaskoidRef { name, .. }) => {
                 let target =
                     self.schema.bindings.get(name).unwrap_or_else(|| panic!("Unknown binding ref {}", name));
                 if is_named(target) {
@@ -181,61 +208,57 @@ impl<'a> CodeGen<'a> {
                     self.type_of(target, name, boxed)
                 }
             },
-            Maskoid::Option(inner) => {
+            Maskoid::Option(MaskoidElement { element: inner, .. }) => {
                 let inner_ty = self.option_inner_type(inner, hint);
-                format!("{}<{}>", self.pre("Opt"), inner_ty)
+                format!("{}<{}>", OPTIONAL, inner_ty)
             },
-            Maskoid::Set(inner) | Maskoid::List(inner) => {
+            Maskoid::List(MaskoidElement { element: inner, .. }) => {
                 let inner_ty = self.type_of(inner, hint, true);
-                format!("{}<{}>", self.pre("TList"), inner_ty)
+                format!("java.util.List<{}>", inner_ty)
             },
-            Maskoid::StringMap(inner) => {
+            Maskoid::Set(MaskoidElement { element: inner, .. }) => {
                 let inner_ty = self.type_of(inner, hint, true);
-                format!("{}<String, {}>", self.pre("TOrderedMap"), inner_ty)
+                format!("java.util.Set<{}>", inner_ty)
             },
-            Maskoid::Tuple(_) | Maskoid::Record(_) | Maskoid::TaggedUnion(_) => {
-                self.ensure_named(maskoid, hint);
-                hint.to_string()
+            Maskoid::StringMap(MaskoidElement { element: inner, .. }) => {
+                let inner_ty = self.type_of(inner, hint, true);
+                format!("java.util.Map<String, {}>", inner_ty)
             },
+            Maskoid::Tuple(_) | Maskoid::Record(_) | Maskoid::TaggedUnion(_) => self.ensure_named(maskoid, hint),
         };
     }
 
     fn option_inner_type(&mut self, inner: &Maskoid, hint: &str) -> String {
         if matches!(inner, Maskoid::Option(_)) {
-            let wrapper = format!("{}Wrapper", hint);
+            let wrapper = self.name_for(inner, &format!("{}Wrapper", hint));
             if self.generated.insert(wrapper.clone()) {
                 let element_ty = self.type_of(inner, &format!("{}Inner", hint), true);
                 self.files.push(JavaFile {
                     path: self.file_path(&wrapper),
                     source: format!("{}public record {}({} element) {{}}\n", self.header(), wrapper, element_ty),
                 });
-                let mut enc = String::new();
                 let enc_out = self.tmp("j");
-                enc.push_str(&self.encode(inner, &format!("{}Inner", hint), "value.element()", &enc_out));
-                let mut dec = String::new();
+                let enc = self.encode(inner, &format!("{}Inner", hint), "value.element()", &enc_out);
                 let dec_out = self.tmp("v");
-                dec.push_str(
-                    &self.decode(
+                let dec =
+                    self.decode(
                         inner,
                         &format!("{}Inner", hint),
-                        "__entry.getValue()",
-                        "path.field(\"element\")",
+                        "value.get(\"element\")",
+                        &field_path("path", "element"),
                         &dec_out,
-                    ),
-                );
+                    );
                 let source =
                     format!(
-                        "{header}public final class {w}Codec {{\n    private {w}Codec() {{}}\n\n    public static {jv} toValue({w} value) {{\n{enc}        {om}<String, {jv}> __o = new {om}<>();\n        __o.put(\"element\", {enc_out});\n        return new {jo}(__o);\n    }}\n\n    public static {w} fromValue({jv} value, {json}.FieldPath path) {{\n        var __o = {jvs}.object(value, path);\n        if (__o.size() != 1 || !__o.containsKey(\"element\")) {{\n            {exc}\n        }}\n        var __entry = __o.entrySet().iterator().next();\n{dec}        return new {w}({dec_out});\n    }}\n}}\n",
+                        "{header}public final class {w}Codec {{\n    private {w}Codec() {{}}\n\n    public static {jn} toValue({w} value) {{\n{enc}        {on} __o = {f}.objectNode();\n        __o.set(\"element\", {enc_out});\n        return __o;\n    }}\n\n    public static {w} fromValue({jn} value) {{\n        return fromValue(value, \"$\");\n    }}\n\n    public static {w} fromValue({jn} value, String path) {{\n        if (!value.isObject() || value.size() != 1 || !value.has(\"element\")) {{\n            {exc}\n        }}\n{dec}        return new {w}({dec_out});\n    }}\n}}\n",
                         header = self.header(),
                         w = wrapper,
-                        jv = self.rt("JsonValue"),
-                        jo = self.rt("JsonValueObject"),
-                        jvs = self.rt("JsonValues"),
-                        json = self.rt("Json"),
-                        om = self.pre("TOrderedMap"),
+                        jn = JSON_NODE,
+                        on = OBJECT_NODE,
+                        f = NODE_FACTORY,
                         enc = indent(&enc, 2),
                         enc_out = enc_out,
-                        exc = self.exception("\"Expected an object with exactly the key 'element'\"", "path"),
+                        exc = exception("\"Expected an object with exactly the key 'element'\"", "path"),
                         dec = indent(&dec, 2),
                         dec_out = dec_out,
                     );
@@ -257,33 +280,31 @@ impl<'a> CodeGen<'a> {
         return format!("{}/{}.java", self.config.package.replace('.', "/"), name);
     }
 
-    fn ensure_named(&mut self, maskoid: &Maskoid, name: &str) {
-        if !self.generated.insert(name.to_string()) {
-            return;
+    fn ensure_named(&mut self, maskoid: &Maskoid, hint: &str) -> String {
+        let name = self.name_for(maskoid, hint);
+        if !self.generated.insert(name.clone()) {
+            return name;
         }
+        let name = name.as_str();
         match maskoid {
             Maskoid::Record(r) => {
-                let fields = &r.fields;
-                let description = r.description.as_deref();
-                let parts = self.record_parts(name, fields, "value", "value", "path");
+                let parts = self.record_parts(name, &r.fields, "value", "value", "path");
                 self.files.push(JavaFile {
                     path: self.file_path(name),
                     source: format!(
                         "{}{}public record {}({}) {{}}\n",
                         self.header(),
-                        javadoc(description),
+                        javadoc(r.description.as_deref()),
                         name,
                         parts.components
                     ),
                 });
                 let source =
                     format!(
-                        "{header}public final class {n}Codec {{\n    private {n}Codec() {{}}\n\n    public static {jv} toValue({n} value) {{\n{enc}        return new {jo}(__o);\n    }}\n\n    public static {n} fromValue({jv} value, {json}.FieldPath path) {{\n{dec}        return new {n}({ctor});\n    }}\n{root}}}\n",
+                        "{header}public final class {n}Codec {{\n    private {n}Codec() {{}}\n\n    public static {jn} toValue({n} value) {{\n{enc}        return __o;\n    }}\n\n    public static {n} fromValue({jn} value) {{\n        return fromValue(value, \"$\");\n    }}\n\n    public static {n} fromValue({jn} value, String path) {{\n{dec}        return new {n}({ctor});\n    }}\n{root}}}\n",
                         header = self.header(),
                         n = name,
-                        jv = self.rt("JsonValue"),
-                        jo = self.rt("JsonValueObject"),
-                        json = self.rt("Json"),
+                        jn = JSON_NODE,
                         enc = indent(&parts.encode, 2),
                         dec = indent(&parts.decode, 2),
                         ctor = parts.ctor,
@@ -295,19 +316,17 @@ impl<'a> CodeGen<'a> {
                 });
             },
             Maskoid::TaggedUnion(u) => {
-                let variants = &u.variants;
-                let description = u.description.as_deref();
-                let mut sorted: Vec<_> = variants.iter().collect();
+                let mut sorted: Vec<_> = u.variants.iter().collect();
                 sorted.sort_by_key(|(k, _)| k.as_str());
                 let mut permits = vec![];
                 let mut enc_cases = String::new();
                 let mut dec_string_cases = String::new();
                 let mut dec_object_cases = String::new();
                 for (tag, variant) in sorted {
-                    let vname = format!("{}{}", name, to_java_ident(tag.to_upper_camel_case()));
+                    let vname = self.fresh(&format!("{}{}", name, to_java_ident(tag.to_upper_camel_case())));
                     permits.push(vname.clone());
                     match &variant.maskoid {
-                        Maskoid::Null => {
+                        Maskoid::Null(_) => {
                             self.files.push(JavaFile {
                                 path: self.file_path(&vname),
                                 source: format!(
@@ -319,20 +338,14 @@ impl<'a> CodeGen<'a> {
                                 ),
                             });
                             enc_cases.push_str(
-                                &format!(
-                                    "case {} __v -> new {}({});\n",
-                                    vname,
-                                    self.rt("JsonValueString"),
-                                    java_string(tag)
-                                ),
+                                &format!("case {} __v -> {}.textNode({});\n", vname, NODE_FACTORY, java_string(tag)),
                             );
                             dec_string_cases.push_str(&format!("case {} -> new {}();\n", java_string(tag), vname));
                             dec_object_cases.push_str(
                                 &format!(
-                                    "case {} -> {{\n    if (!(__entry.getValue() instanceof {})) {{\n        {}\n    }}\n    yield new {}();\n}}\n",
+                                    "case {} -> {{\n    if (!__entry.getValue().isNull()) {{\n        {}\n    }}\n    yield new {}();\n}}\n",
                                     java_string(tag),
-                                    self.rt("JsonValueNull"),
-                                    self.exception("\"Expected null\"", "__p"),
+                                    exception("\"Expected null\"", "__p"),
                                     vname
                                 ),
                             );
@@ -352,14 +365,12 @@ impl<'a> CodeGen<'a> {
                             });
                             enc_cases.push_str(
                                 &format!(
-                                    "case {} __v -> {{\n{}    {om}<String, {jv}> __u = new {om}<>();\n    __u.put({}, new {}(__o));\n    yield new {}(__u);\n}}\n",
+                                    "case {} __v -> {{\n{}    {on} __u = {f}.objectNode();\n    __u.set({}, __o);\n    yield __u;\n}}\n",
                                     vname,
                                     indent(&parts.encode, 1),
                                     java_string(tag),
-                                    self.rt("JsonValueObject"),
-                                    self.rt("JsonValueObject"),
-                                    om = self.pre("TOrderedMap"),
-                                    jv = self.rt("JsonValue"),
+                                    on = OBJECT_NODE,
+                                    f = NODE_FACTORY,
                                 ),
                             );
                             dec_object_cases.push_str(
@@ -389,14 +400,13 @@ impl<'a> CodeGen<'a> {
                             let body = self.encode(other, &vname, "__v.value()", &out);
                             enc_cases.push_str(
                                 &format!(
-                                    "case {} __v -> {{\n{}    {om}<String, {jv}> __o = new {om}<>();\n    __o.put({}, {});\n    yield new {}(__o);\n}}\n",
+                                    "case {} __v -> {{\n{}    {on} __o = {f}.objectNode();\n    __o.set({}, {});\n    yield __o;\n}}\n",
                                     vname,
                                     indent(&body, 1),
                                     java_string(tag),
                                     out,
-                                    self.rt("JsonValueObject"),
-                                    om = self.pre("TOrderedMap"),
-                                    jv = self.rt("JsonValue"),
+                                    on = OBJECT_NODE,
+                                    f = NODE_FACTORY,
                                 ),
                             );
                             let v = self.tmp("v");
@@ -418,40 +428,38 @@ impl<'a> CodeGen<'a> {
                     source: format!(
                         "{}{}public sealed interface {} permits {} {{}}\n",
                         self.header(),
-                        javadoc(description),
+                        javadoc(u.description.as_deref()),
                         name,
                         permits.join(", ")
                     ),
                 });
                 let unknown_tag =
-                    self.exception(&format!("\"Unknown variant '\" + __s.value() + \"' of {}\"", name), "path");
+                    exception(&format!("\"Unknown variant '\" + value.textValue() + \"' of {}\"", name), "path");
                 let string_case = if dec_string_cases.is_empty() {
                     format!("            {}\n", unknown_tag)
                 } else {
                     format!(
-                        "            return switch (__s.value()) {{\n{}                default -> {{\n                    {}\n                }}\n            }};\n",
+                        "            return switch (value.textValue()) {{\n{}                default -> {{\n                    {}\n                }}\n            }};\n",
                         indent(&dec_string_cases, 4),
                         unknown_tag
                     )
                 };
                 let source =
                     format!(
-                        "{header}public final class {n}Codec {{\n    private {n}Codec() {{}}\n\n    public static {jv} toValue({n} value) {{\n        return switch (value) {{\n{enc}        }};\n    }}\n\n    public static {n} fromValue({jv} value, {json}.FieldPath path) {{\n        if (value instanceof {js} __s) {{\n{string_case}        }}\n        var __o = {jvs}.object(value, path);\n        if (__o.size() != 1) {{\n            {one_key}\n        }}\n        var __entry = __o.entrySet().iterator().next();\n        {json}.FieldPath __p = path.field(__entry.getKey());\n        return switch (__entry.getKey()) {{\n{dec_object}            default -> {{\n                {unknown_variant}\n            }}\n        }};\n    }}\n{root}}}\n",
+                        "{header}public final class {n}Codec {{\n    private {n}Codec() {{}}\n\n    public static {jn} toValue({n} value) {{\n        return switch (value) {{\n{enc}        }};\n    }}\n\n    public static {n} fromValue({jn} value) {{\n        return fromValue(value, \"$\");\n    }}\n\n    public static {n} fromValue({jn} value, String path) {{\n        if (value.isTextual()) {{\n{string_case}        }}\n        if (!value.isObject() || value.size() != 1) {{\n            {one_key}\n        }}\n        var __entry = value.properties().iterator().next();\n        String __p = path + \".\" + __entry.getKey();\n        return switch (__entry.getKey()) {{\n{dec_object}            default -> {{\n                {unknown_variant}\n            }}\n        }};\n    }}\n{root}}}\n",
                         header = self.header(),
                         n = name,
-                        jv = self.rt("JsonValue"),
-                        js = self.rt("JsonValueString"),
-                        jvs = self.rt("JsonValues"),
-                        json = self.rt("Json"),
+                        jn = JSON_NODE,
                         enc = indent(&enc_cases, 3),
                         string_case = string_case,
-                        one_key = self.exception("\"Expected an object with exactly one key\"", "path"),
+                        one_key =
+                            exception(
+                                "\"Expected an object with exactly one key, or a string for a valueless variant\"",
+                                "path",
+                            ),
                         dec_object = indent(&dec_object_cases, 3),
                         unknown_variant =
-                            self.exception(
-                                &format!("\"Unknown variant '\" + __entry.getKey() + \"' of {}\"", name),
-                                "__p",
-                            ),
+                            exception(&format!("\"Unknown variant '\" + __entry.getKey() + \"' of {}\"", name), "__p"),
                         root = self.root_methods(name, name),
                     );
                 self.files.push(JavaFile {
@@ -460,14 +468,12 @@ impl<'a> CodeGen<'a> {
                 });
             },
             Maskoid::Tuple(t) => {
-                let elements = &t.elements;
-                let description = t.description.as_deref();
                 let mut components = vec![];
                 let mut enc = String::new();
                 let mut enc_outs = vec![];
                 let mut dec = String::new();
                 let mut dec_outs = vec![];
-                for (i, element) in elements.iter().enumerate() {
+                for (i, element) in t.elements.iter().enumerate() {
                     let hint = format!("{}_{}", name, i);
                     let ty = self.type_of(&element.maskoid, &hint, false);
                     components.push(format!("{}{} e{}", javadoc(element.description.as_deref()), ty, i));
@@ -479,8 +485,8 @@ impl<'a> CodeGen<'a> {
                         &self.decode(
                             &element.maskoid,
                             &hint,
-                            &format!("__a.get({})", i),
-                            &format!("path.index({})", i),
+                            &format!("value.get({})", i),
+                            &format!("path + \"[{}]\"", i),
                             &v,
                         ),
                     );
@@ -491,26 +497,24 @@ impl<'a> CodeGen<'a> {
                     source: format!(
                         "{}{}public record {}({}) {{}}\n",
                         self.header(),
-                        javadoc(description),
+                        javadoc(t.description.as_deref()),
                         name,
                         components.join(", ")
                     ),
                 });
+                let adds: String = enc_outs.iter().map(|o| format!("        __a.add({});\n", o)).collect();
                 let source =
                     format!(
-                        "{header}public final class {n}Codec {{\n    private {n}Codec() {{}}\n\n    public static {jv} toValue({n} value) {{\n{enc}        return new {ja}({tl}.of({outs}));\n    }}\n\n    public static {n} fromValue({jv} value, {json}.FieldPath path) {{\n        var __a = {jvs}.array(value, path);\n        if (__a.size() != {len}) {{\n            {bad_len}\n        }}\n{dec}        return new {n}({dec_outs});\n    }}\n{root}}}\n",
+                        "{header}public final class {n}Codec {{\n    private {n}Codec() {{}}\n\n    public static {jn} toValue({n} value) {{\n{enc}        {an} __a = {f}.arrayNode();\n{adds}        return __a;\n    }}\n\n    public static {n} fromValue({jn} value) {{\n        return fromValue(value, \"$\");\n    }}\n\n    public static {n} fromValue({jn} value, String path) {{\n        if (!value.isArray() || value.size() != {len}) {{\n            {bad_len}\n        }}\n{dec}        return new {n}({dec_outs});\n    }}\n{root}}}\n",
                         header = self.header(),
                         n = name,
-                        jv = self.rt("JsonValue"),
-                        ja = self.rt("JsonValueArray"),
-                        jvs = self.rt("JsonValues"),
-                        json = self.rt("Json"),
-                        tl = self.pre("TList"),
+                        jn = JSON_NODE,
+                        an = ARRAY_NODE,
+                        f = NODE_FACTORY,
                         enc = indent(&enc, 2),
-                        outs = enc_outs.join(", "),
-                        len = elements.len(),
-                        bad_len =
-                            self.exception(&format!("\"Expected an array of length {}\"", elements.len()), "path"),
+                        adds = adds,
+                        len = t.elements.len(),
+                        bad_len = exception(&format!("\"Expected an array of length {}\"", t.elements.len()), "path"),
                         dec = indent(&dec, 2),
                         dec_outs = dec_outs.join(", "),
                         root = self.root_methods(name, name),
@@ -522,6 +526,7 @@ impl<'a> CodeGen<'a> {
             },
             _ => unreachable!(),
         }
+        return name.to_string();
     }
 
     fn record_parts(
@@ -546,13 +551,14 @@ impl<'a> CodeGen<'a> {
             let ty = self.type_of(&field.maskoid, &hint, false);
             components.push(format!("{}{} {}", javadoc(field.description.as_deref()), ty, ident));
             let out = self.tmp("j");
+            let v = self.tmp("v");
             match &field.maskoid {
-                Maskoid::Option(inner) => {
-                    let unwrapped = format!("{}.{}().optUnwrap()", receiver, ident);
+                Maskoid::Option(MaskoidElement { element: inner, .. }) => {
+                    let unwrapped = format!("{}.{}().get()", receiver, ident);
                     let body = self.encode_option_inner(inner, &hint, &unwrapped, &out);
                     enc.push_str(
                         &format!(
-                            "if ({}.{}().optIsSome()) {{\n{}    __o.put({}, {});\n}}\n",
+                            "if ({}.{}().isPresent()) {{\n{}    __o.set({}, {});\n}}\n",
                             receiver,
                             ident,
                             indent(&body, 1),
@@ -560,16 +566,13 @@ impl<'a> CodeGen<'a> {
                             out
                         ),
                     );
-                    dec_locals.push_str(&format!("{} __f_{} = {}.none();\n", ty, ident, self.pre("Opt")));
-                    let v = self.tmp("v");
+                    dec_locals.push_str(&format!("{} __f_{} = {}.empty();\n", ty, ident, OPTIONAL));
                     let body = self.decode(&field.maskoid, &hint, "__fe.getValue()", "__fp", &v);
                     dec_cases.push_str(
                         &format!(
-                            "case {} -> {{\n    {}.FieldPath __fp = {}.field({});\n{}    __f_{} = {};\n}}\n",
+                            "case {} -> {{\n    String __fp = {};\n{}    __f_{} = {};\n}}\n",
                             java_string(key),
-                            self.rt("Json"),
-                            path,
-                            java_string(key),
+                            field_path(path, key),
                             indent(&body, 1),
                             ident,
                             v
@@ -579,63 +582,78 @@ impl<'a> CodeGen<'a> {
                 },
                 other => {
                     let body = self.encode(other, &hint, &format!("{}.{}()", receiver, ident), &out);
-                    enc.push_str(&format!("{}__o.put({}, {});\n", body, java_string(key), out));
-                    let boxed_ty = self.type_of(other, &hint, true);
-                    dec_locals.push_str(
-                        &format!("{}<{}> __f_{} = {}.none();\n", self.pre("Opt"), boxed_ty, ident, self.pre("Opt")),
-                    );
-                    let v = self.tmp("v");
+                    enc.push_str(&format!("{}__o.set({}, {});\n", body, java_string(key), out));
                     let body = self.decode(other, &hint, "__fe.getValue()", "__fp", &v);
-                    dec_cases.push_str(
-                        &format!(
-                            "case {} -> {{\n    {}.FieldPath __fp = {}.field({});\n{}    __f_{} = {}.some({});\n}}\n",
-                            java_string(key),
-                            self.rt("Json"),
-                            path,
-                            java_string(key),
-                            indent(&body, 1),
-                            ident,
-                            self.pre("Opt"),
-                            v
-                        ),
-                    );
-                    dec_checks.push_str(
-                        &format!(
-                            "if (__f_{}.optIsNone()) {{\n    {}\n}}\n",
-                            ident,
-                            self.exception(
-                                &format!("\"Missing required field {}\"", java_string(key).replace('"', "'")),
-                                &format!("{}.field({})", path, java_string(key)),
-                            )
-                        ),
-                    );
-                    ctor_args.push(format!("__f_{}.optUnwrap()", ident));
+                    if matches!(other, Maskoid::Null(_)) {
+                        dec_locals.push_str(&format!("boolean __seen_{} = false;\n", ident));
+                        dec_cases.push_str(
+                            &format!(
+                                "case {} -> {{\n    String __fp = {};\n{}    __seen_{} = true;\n}}\n",
+                                java_string(key),
+                                field_path(path, key),
+                                indent(&body, 1),
+                                ident
+                            ),
+                        );
+                        dec_checks.push_str(
+                            &format!(
+                                "if (!__seen_{}) {{\n    {}\n}}\n",
+                                ident,
+                                exception(
+                                    &format!("\"Missing required field {}\"", java_string(key).replace('"', "'")),
+                                    &field_path(path, key),
+                                )
+                            ),
+                        );
+                        ctor_args.push("null".to_string());
+                    } else {
+                        let boxed_ty = self.type_of(other, &hint, true);
+                        dec_locals.push_str(
+                            &format!("{}<{}> __f_{} = {}.empty();\n", OPTIONAL, boxed_ty, ident, OPTIONAL),
+                        );
+                        dec_cases.push_str(
+                            &format!(
+                                "case {} -> {{\n    String __fp = {};\n{}    __f_{} = {}.of({});\n}}\n",
+                                java_string(key),
+                                field_path(path, key),
+                                indent(&body, 1),
+                                ident,
+                                OPTIONAL,
+                                v
+                            ),
+                        );
+                        dec_checks.push_str(
+                            &format!(
+                                "if (__f_{}.isEmpty()) {{\n    {}\n}}\n",
+                                ident,
+                                exception(
+                                    &format!("\"Missing required field {}\"", java_string(key).replace('"', "'")),
+                                    &field_path(path, key),
+                                )
+                            ),
+                        );
+                        ctor_args.push(format!("__f_{}.get()", ident));
+                    }
                 },
             }
         }
         let decode =
             format!(
-                "{locals}for (var __fe : {jvs}.object({json}, {path}).entrySet()) {{\n    String __fname = __fe.getKey();\n    switch (__fname) {{\n{cases}        default -> {{\n            {unknown}\n        }}\n    }}\n}}\n{checks}",
-                locals = dec_locals,
-                jvs = self.rt("JsonValues"),
+                "if (!{json}.isObject()) {{\n    {not_object}\n}}\n{locals}for (var __fe : {json}.properties()) {{\n    switch (__fe.getKey()) {{\n{cases}        default -> {{\n            {unknown}\n        }}\n    }}\n}}\n{checks}",
                 json = json,
-                path = path,
+                not_object = exception("\"Expected an object\"", path),
+                locals = dec_locals,
                 cases = indent(&dec_cases, 2),
                 unknown =
-                    self.exception(
-                        &format!("\"Unknown field '\" + __fname + \"' in {}\"", name),
-                        &format!("{}.field(__fname)", path),
+                    exception(
+                        &format!("\"Unknown field '\" + __fe.getKey() + \"' in {}\"", name),
+                        &format!("{} + \".\" + __fe.getKey()", path),
                     ),
                 checks = dec_checks,
             );
         return RecordParts {
             components: components.join(", "),
-            encode: format!(
-                "{om}<String, {jv}> __o = new {om}<>();\n{enc}",
-                om = self.pre("TOrderedMap"),
-                jv = self.rt("JsonValue"),
-                enc = enc,
-            ),
+            encode: format!("{} __o = {}.objectNode();\n{}", OBJECT_NODE, NODE_FACTORY, enc),
             decode: decode,
             ctor: ctor_args.join(", "),
         };
@@ -646,82 +664,91 @@ impl<'a> CodeGen<'a> {
             return String::new();
         }
         return format!(
-            "\n    public static String serialize({n} value) {{\n        return {jvs}.serialize(toValue(value));\n    }}\n\n    public static {n} deserialize(String json) throws java.io.IOException {{\n        return fromValue({jvs}.parse(json), {j}.FieldPath.root());\n    }}\n",
+            "\n    private static final com.fasterxml.jackson.databind.ObjectMapper MAPPER =\n        new com.fasterxml.jackson.databind.ObjectMapper()\n            .enable(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_TRAILING_TOKENS);\n\n    public static String serialize({n} value) throws com.fasterxml.jackson.core.JsonProcessingException {{\n        return MAPPER.writeValueAsString(toValue(value));\n    }}\n\n    public static {n} deserialize(String json) throws com.fasterxml.jackson.core.JsonProcessingException {{\n        return fromValue(MAPPER.readTree(json), \"$\");\n    }}\n",
             n = ty,
-            jvs = self.rt("JsonValues"),
-            j = self.rt("Json"),
         );
     }
 
     fn encode(&mut self, maskoid: &Maskoid, hint: &str, expr: &str, out: &str) -> String {
-        let jv = self.rt("JsonValue");
         return match maskoid {
-            Maskoid::Null => format!("{} {} = new {}();\n", jv, out, self.rt("JsonValueNull")),
-            Maskoid::String | Maskoid::ConstString(_) => format!(
-                "{} {} = new {}({});\n",
-                jv,
+            Maskoid::Null(_) => format!("{} {} = {}.nullNode();\n", JSON_NODE, out, NODE_FACTORY),
+            Maskoid::String(_) | Maskoid::ConstString(_) => format!(
+                "{} {} = {}.textNode({});\n",
+                JSON_NODE,
                 out,
-                self.rt("JsonValueString"),
+                NODE_FACTORY,
                 expr
             ),
-            Maskoid::Bool => format!("{} {} = new {}({});\n", jv, out, self.rt("JsonValueBoolean"), expr),
-            Maskoid::Int => format!("{} {} = new {}({});\n", jv, out, self.rt("JsonValueNumberInt"), expr),
-            Maskoid::Float => format!("{} {} = new {}({});\n", jv, out, self.rt("JsonValueNumberFloat"), expr),
-            Maskoid::Any => format!("{} {} = {};\n", jv, out, expr),
-            Maskoid::Ref(name) => format!("{} {} = {}Codec.toValue({});\n", jv, out, name, expr),
-            Maskoid::Option(inner) => {
-                let unwrapped = format!("{}.optUnwrap()", expr);
+            Maskoid::Bool(_) => format!("{} {} = {}.booleanNode({});\n", JSON_NODE, out, NODE_FACTORY, expr),
+            Maskoid::Int(_) | Maskoid::Float(_) => format!(
+                "{} {} = {}.numberNode({});\n",
+                JSON_NODE,
+                out,
+                NODE_FACTORY,
+                expr
+            ),
+            Maskoid::Any(_) => format!("{} {} = {};\n", JSON_NODE, out, expr),
+            Maskoid::Ref(MaskoidRef { name, .. }) => format!(
+                "{} {} = {}Codec.toValue({});\n",
+                JSON_NODE,
+                out,
+                name,
+                expr
+            ),
+            Maskoid::Option(MaskoidElement { element: inner, .. }) => {
+                let unwrapped = format!("{}.get()", expr);
                 let some = self.tmp("j");
                 let body = self.encode_option_inner(inner, hint, &unwrapped, &some);
                 format!(
-                    "{jv} {out};\nif ({expr}.optIsSome()) {{\n{body}    {out} = {some};\n}} else {{\n    {out} = new {null}();\n}}\n",
-                    jv = jv,
+                    "{jn} {out};\nif ({expr}.isPresent()) {{\n{body}    {out} = {some};\n}} else {{\n    {out} = {f}.nullNode();\n}}\n",
+                    jn = JSON_NODE,
                     out = out,
                     expr = expr,
                     body = indent(&body, 1),
                     some = some,
-                    null = self.rt("JsonValueNull"),
+                    f = NODE_FACTORY,
                 )
             },
-            Maskoid::Set(inner) | Maskoid::List(inner) => {
-                let list = self.tmp("l");
+            Maskoid::Set(MaskoidElement { element: inner, .. }) |
+            Maskoid::List(MaskoidElement { element: inner, .. }) => {
+                let list = self.tmp("a");
                 let element = self.tmp("e");
                 let element_out = self.tmp("j");
                 let body = self.encode(inner, hint, &element, &element_out);
                 format!(
-                    "{tl}<{jv}> {list} = new {tl}<>();\nfor (var {element} : {expr}) {{\n{body}    {list}.add({element_out});\n}}\n{jv} {out} = new {ja}({list});\n",
-                    tl = self.pre("TList"),
-                    jv = jv,
+                    "{an} {list} = {f}.arrayNode();\nfor (var {element} : {expr}) {{\n{body}    {list}.add({element_out});\n}}\n{jn} {out} = {list};\n",
+                    an = ARRAY_NODE,
                     list = list,
+                    f = NODE_FACTORY,
                     element = element,
                     expr = expr,
                     body = indent(&body, 1),
                     element_out = element_out,
+                    jn = JSON_NODE,
                     out = out,
-                    ja = self.rt("JsonValueArray"),
                 )
             },
-            Maskoid::StringMap(inner) => {
+            Maskoid::StringMap(MaskoidElement { element: inner, .. }) => {
                 let map = self.tmp("m");
                 let entry = self.tmp("e");
                 let element_out = self.tmp("j");
                 let body = self.encode(inner, hint, &format!("{}.getValue()", entry), &element_out);
                 format!(
-                    "{om}<String, {jv}> {map} = new {om}<>();\nfor (var {entry} : {expr}.entrySet()) {{\n{body}    {map}.put({entry}.getKey(), {element_out});\n}}\n{jv} {out} = new {jo}({map});\n",
-                    om = self.pre("TOrderedMap"),
-                    jv = jv,
+                    "{on} {map} = {f}.objectNode();\nfor (var {entry} : {expr}.entrySet()) {{\n{body}    {map}.set({entry}.getKey(), {element_out});\n}}\n{jn} {out} = {map};\n",
+                    on = OBJECT_NODE,
                     map = map,
+                    f = NODE_FACTORY,
                     entry = entry,
                     expr = expr,
                     body = indent(&body, 1),
                     element_out = element_out,
+                    jn = JSON_NODE,
                     out = out,
-                    jo = self.rt("JsonValueObject"),
                 )
             },
             Maskoid::Tuple(_) | Maskoid::Record(_) | Maskoid::TaggedUnion(_) => {
-                self.ensure_named(maskoid, hint);
-                format!("{} {} = {}Codec.toValue({});\n", jv, out, hint, expr)
+                let name = self.ensure_named(maskoid, hint);
+                format!("{} {} = {}Codec.toValue({});\n", JSON_NODE, out, name, expr)
             },
         };
     }
@@ -729,7 +756,7 @@ impl<'a> CodeGen<'a> {
     fn encode_option_inner(&mut self, inner: &Maskoid, hint: &str, expr: &str, out: &str) -> String {
         if matches!(inner, Maskoid::Option(_)) {
             let wrapper = self.option_inner_type(inner, hint);
-            return format!("{} {} = {}Codec.toValue({});\n", self.rt("JsonValue"), out, wrapper, expr);
+            return format!("{} {} = {}Codec.toValue({});\n", JSON_NODE, out, wrapper, expr);
         }
         return self.encode(inner, hint, expr, out);
     }
@@ -737,39 +764,59 @@ impl<'a> CodeGen<'a> {
     fn decode(&mut self, maskoid: &Maskoid, hint: &str, json: &str, path: &str, out: &str) -> String {
         let ty = self.type_of(maskoid, hint, false);
         return match maskoid {
-            Maskoid::Null => format!(
-                "if (!({json} instanceof {null})) {{\n    {exc}\n}}\n{ty} {out} = new {null}();\n",
+            Maskoid::Null(_) => format!(
+                "if (!{json}.isNull()) {{\n    {exc}\n}}\n{ty} {out} = null;\n",
                 json = json,
-                null = self.rt("JsonValueNull"),
-                exc = self.exception("\"Expected null\"", path),
+                exc = exception("\"Expected null\"", path),
                 ty = ty,
                 out = out,
             ),
-            Maskoid::String => format!("{} {} = {}.string({}, {});\n", ty, out, self.rt("JsonValues"), json, path),
-            Maskoid::ConstString(expected) => format!(
-                "{ty} {out} = {jvs}.string({json}, {path});\nif (!{out}.equals({expected})) {{\n    {exc}\n}}\n",
+            Maskoid::String(_) => format!(
+                "if (!{json}.isTextual()) {{\n    {exc}\n}}\n{ty} {out} = {json}.textValue();\n",
+                json = json,
+                exc = exception("\"Expected a string\"", path),
                 ty = ty,
                 out = out,
-                jvs = self.rt("JsonValues"),
+            ),
+            Maskoid::ConstString(MaskoidConstString { value: expected, .. }) => format!(
+                "if (!{json}.isTextual() || !{json}.textValue().equals({expected})) {{\n    {exc}\n}}\n{ty} {out} = {json}.textValue();\n",
                 json = json,
-                path = path,
                 expected = java_string(expected),
-                exc = self.exception(&format!("\"Expected the string \" + {}", java_string(expected)), path),
-            ),
-            Maskoid::Bool => format!("{} {} = {}.bool({}, {});\n", ty, out, self.rt("JsonValues"), json, path),
-            Maskoid::Int => format!("{} {} = {}.numberInt({}, {});\n", ty, out, self.rt("JsonValues"), json, path),
-            Maskoid::Float => format!(
-                "{ty} {out} = switch ({json}) {{\n    case {int} __n -> (double) __n.value();\n    case {float} __n -> __n.value();\n    default -> {exc}\n}};\n",
+                exc = exception(&format!("\"Expected the string \" + {}", java_string(expected)), path),
                 ty = ty,
                 out = out,
-                json = json,
-                int = self.rt("JsonValueNumberInt"),
-                float = self.rt("JsonValueNumberFloat"),
-                exc = self.exception("\"Expected number\"", path),
             ),
-            Maskoid::Any => format!("{} {} = {};\n", ty, out, json),
-            Maskoid::Ref(name) => format!("{} {} = {}Codec.fromValue({}, {});\n", ty, out, name, json, path),
-            Maskoid::Option(inner) => {
+            Maskoid::Bool(_) => format!(
+                "if (!{json}.isBoolean()) {{\n    {exc}\n}}\n{ty} {out} = {json}.booleanValue();\n",
+                json = json,
+                exc = exception("\"Expected a boolean\"", path),
+                ty = ty,
+                out = out,
+            ),
+            Maskoid::Int(_) => format!(
+                "if (!{json}.isIntegralNumber() || !{json}.canConvertToLong()) {{\n    {exc}\n}}\n{ty} {out} = {json}.longValue();\n",
+                json = json,
+                exc = exception("\"Expected an integer\"", path),
+                ty = ty,
+                out = out,
+            ),
+            Maskoid::Float(_) => format!(
+                "if (!{json}.isNumber()) {{\n    {exc}\n}}\n{ty} {out} = {json}.doubleValue();\n",
+                json = json,
+                exc = exception("\"Expected a number\"", path),
+                ty = ty,
+                out = out,
+            ),
+            Maskoid::Any(_) => format!("{} {} = {};\n", ty, out, json),
+            Maskoid::Ref(MaskoidRef { name, .. }) => format!(
+                "{} {} = {}Codec.fromValue({}, {});\n",
+                ty,
+                out,
+                name,
+                json,
+                path
+            ),
+            Maskoid::Option(MaskoidElement { element: inner, .. }) => {
                 let v = self.tmp("v");
                 let body = if matches!(inner.as_ref(), Maskoid::Option(_)) {
                     let wrapper = self.option_inner_type(inner, hint);
@@ -777,64 +824,58 @@ impl<'a> CodeGen<'a> {
                 } else {
                     self.decode(inner, hint, json, path, &v)
                 };
+                let wrap = if matches!(inner.as_ref(), Maskoid::Null(_)) {
+                    "ofNullable"
+                } else {
+                    "of"
+                };
                 format!(
-                    "{ty} {out};\nif ({json} instanceof {null}) {{\n    {out} = {opt}.none();\n}} else {{\n{body}    {out} = {opt}.some({v});\n}}\n",
+                    "{ty} {out};\nif ({json}.isNull()) {{\n    {out} = {opt}.empty();\n}} else {{\n{body}    {out} = {opt}.{wrap}({v});\n}}\n",
                     ty = ty,
                     out = out,
                     json = json,
-                    null = self.rt("JsonValueNull"),
-                    opt = self.pre("Opt"),
+                    opt = OPTIONAL,
                     body = indent(&body, 1),
+                    wrap = wrap,
                     v = v,
                 )
             },
-            Maskoid::Set(inner) | Maskoid::List(inner) => {
+            Maskoid::Set(MaskoidElement { element: inner, .. }) |
+            Maskoid::List(MaskoidElement { element: inner, .. }) => {
                 let index = self.tmp("i");
                 let element = self.tmp("e");
                 let v = self.tmp("v");
-                let body = self.decode(inner, hint, &element, &format!("{}.index({})", path, index), &v);
-                let (seen_decl, seen_check) = match maskoid {
-                    Maskoid::Set(_) => {
-                        let seen = self.tmp("s");
-                        let inner_ty = self.type_of(inner, hint, true);
-                        (
-                            format!(
-                                "{ts}<{t}> {seen} = new {ts}<>();\n",
-                                ts = self.pre("TSet"),
-                                t = inner_ty,
-                                seen = seen
-                            ),
-                            format!(
-                                "    if (!{seen}.add({v})) {{\n        {exc}\n    }}\n",
-                                seen = seen,
-                                v = v,
-                                exc =
-                                    self.exception(
-                                        "\"Duplicate element in set\"",
-                                        &format!("{}.index({})", path, index)
-                                    ),
-                            ),
-                        )
-                    },
-                    _ => (String::new(), String::new()),
+                let body = self.decode(inner, hint, &element, &format!("{} + \"[\" + {} + \"]\"", path, index), &v);
+                let (collection, add) = match maskoid {
+                    Maskoid::Set(_) => (
+                        "java.util.LinkedHashSet",
+                        format!(
+                            "    if (!{out}.add({v})) {{\n        {exc}\n    }}\n",
+                            out = out,
+                            v = v,
+                            exc =
+                                exception(
+                                    "\"Duplicate element in set\"",
+                                    &format!("{} + \"[\" + {} + \"]\"", path, index)
+                                ),
+                        ),
+                    ),
+                    _ => ("java.util.ArrayList", format!("    {}.add({});\n", out, v)),
                 };
                 format!(
-                    "{ty} {out} = new {tl}<>();\n{seen_decl}int {index} = 0;\nfor (var {element} : {jvs}.array({json}, {path})) {{\n{body}{seen_check}    {out}.add({v});\n    {index}++;\n}}\n",
+                    "if (!{json}.isArray()) {{\n    {exc}\n}}\n{ty} {out} = new {collection}<>();\nint {index} = 0;\nfor (var {element} : {json}) {{\n{body}{add}    {index}++;\n}}\n",
+                    json = json,
+                    exc = exception("\"Expected an array\"", path),
                     ty = ty,
                     out = out,
-                    tl = self.pre("TList"),
-                    seen_decl = seen_decl,
+                    collection = collection,
                     index = index,
                     element = element,
-                    jvs = self.rt("JsonValues"),
-                    json = json,
-                    path = path,
                     body = indent(&body, 1),
-                    seen_check = seen_check,
-                    v = v,
+                    add = add,
                 )
             },
-            Maskoid::StringMap(inner) => {
+            Maskoid::StringMap(MaskoidElement { element: inner, .. }) => {
                 let entry = self.tmp("e");
                 let v = self.tmp("v");
                 let body =
@@ -842,25 +883,23 @@ impl<'a> CodeGen<'a> {
                         inner,
                         hint,
                         &format!("{}.getValue()", entry),
-                        &format!("{}.field({}.getKey())", path, entry),
+                        &format!("{} + \".\" + {}.getKey()", path, entry),
                         &v,
                     );
                 format!(
-                    "{ty} {out} = new {om}<>();\nfor (var {entry} : {jvs}.object({json}, {path}).entrySet()) {{\n{body}    {out}.put({entry}.getKey(), {v});\n}}\n",
+                    "if (!{json}.isObject()) {{\n    {exc}\n}}\n{ty} {out} = new java.util.LinkedHashMap<>();\nfor (var {entry} : {json}.properties()) {{\n{body}    {out}.put({entry}.getKey(), {v});\n}}\n",
+                    json = json,
+                    exc = exception("\"Expected an object\"", path),
                     ty = ty,
                     out = out,
-                    om = self.pre("TOrderedMap"),
                     entry = entry,
-                    jvs = self.rt("JsonValues"),
-                    json = json,
-                    path = path,
                     body = indent(&body, 1),
                     v = v,
                 )
             },
             Maskoid::Tuple(_) | Maskoid::Record(_) | Maskoid::TaggedUnion(_) => {
-                self.ensure_named(maskoid, hint);
-                format!("{} {} = {}Codec.fromValue({}, {});\n", ty, out, hint, json, path)
+                let name = self.ensure_named(maskoid, hint);
+                format!("{} {} = {}Codec.fromValue({}, {});\n", ty, out, name, json, path)
             },
         };
     }
@@ -892,14 +931,24 @@ fn indent(text: &str, levels: usize) -> String {
     return out;
 }
 
-pub fn generate_java(schema: &SchemaskV1, config: &JavaConfig) -> Vec<JavaFile> {
+pub fn generate_java(schema: &SchemaskV1, config: &JavaConfig) -> Result<Vec<JavaFile>, crate::Invalid> {
+    crate::v1::check_schema(schema)?;
     let mut codegen = CodeGen {
         schema: schema,
         config: config,
         files: vec![],
+        names: BTreeMap::new(),
+        used: BTreeSet::new(),
         generated: BTreeSet::new(),
         counter: 0,
     };
+    for (name, maskoid) in &schema.bindings {
+        codegen.used.insert(name.clone());
+        if is_named(maskoid) {
+            let key = format!("{}\0{}", name, serde_json::to_string(maskoid).unwrap());
+            codegen.names.insert(key, name.clone());
+        }
+    }
     let mut sorted_bindings: Vec<_> = schema.bindings.iter().collect();
     sorted_bindings.sort_by_key(|(k, _)| k.as_str());
     for (name, maskoid) in sorted_bindings {
@@ -913,15 +962,14 @@ pub fn generate_java(schema: &SchemaskV1, config: &JavaConfig) -> Vec<JavaFile> 
             let dec = codegen.decode(maskoid, name, "value", "path", &v);
             let source =
                 format!(
-                    "{header}{doc}public final class {n}Codec {{\n    private {n}Codec() {{}}\n\n    public static {jv} toValue({ty} value) {{\n{enc}        return {out};\n    }}\n\n    public static {ty} fromValue({jv} value, {json}.FieldPath path) {{\n{dec}        return {v};\n    }}\n{root}}}\n",
+                    "{header}{doc}public final class {n}Codec {{\n    private {n}Codec() {{}}\n\n    public static {jn} toValue({ty} value) {{\n{enc}        return {out};\n    }}\n\n    public static {ty} fromValue({jn} value) {{\n        return fromValue(value, \"$\");\n    }}\n\n    public static {ty} fromValue({jn} value, String path) {{\n{dec}        return {v};\n    }}\n{root}}}\n",
                     header = codegen.header(),
                     doc = javadoc(maskoid.description()),
                     n = name,
-                    jv = codegen.rt("JsonValue"),
+                    jn = JSON_NODE,
                     ty = ty,
                     enc = indent(&enc, 2),
                     out = out,
-                    json = codegen.rt("Json"),
                     dec = indent(&dec, 2),
                     v = v,
                     root = codegen.root_methods(name, &ty),
@@ -933,5 +981,5 @@ pub fn generate_java(schema: &SchemaskV1, config: &JavaConfig) -> Vec<JavaFile> 
         }
     }
     codegen.files.sort_by(|a, b| a.path.cmp(&b.path));
-    return codegen.files;
+    return Ok(codegen.files);
 }

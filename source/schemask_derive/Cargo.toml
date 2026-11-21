@@ -2,6 +2,7 @@
 name = "schemask_derive"
 version = "0.1.6"
 edition = "2024"
+rust-version = "1.88"
 license = "ISC"
 repository = "https://github.com/andrewbaxter/schemask"
 readme = "../../readme.md"

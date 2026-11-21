@@ -3,10 +3,7 @@ mod tests {
     use {
         std::{
             fs,
-            path::{
-                Path,
-                PathBuf,
-            },
+            path::Path,
             process::Command,
             sync::{
                 OnceLock,
@@ -18,48 +15,35 @@ mod tests {
         },
     };
 
-    fn classes() -> Option<&'static PathBuf> {
-        static CLASSES: OnceLock<Option<PathBuf>> = OnceLock::new();
-        return CLASSES.get_or_init(|| {
-            if !Command::new("javac").arg("-version").status().map(|s| s.success()).unwrap_or(false) {
-                eprintln!("javac not found, skipping");
+    fn classpath() -> Option<&'static String> {
+        static CLASSPATH: OnceLock<Option<String>> = OnceLock::new();
+        return CLASSPATH.get_or_init(|| {
+            if !Command::new("mvn").arg("-v").output().map(|o| o.status.success()).unwrap_or(false) {
+                eprintln!("mvn not found, skipping");
                 return None;
             }
-            let out = Path::new(env!("OUT_DIR"));
-            let classes = out.join("classes");
-            let _ = fs::remove_dir_all(&classes);
-            fs::create_dir_all(&classes).unwrap();
-            let mut sources = vec![];
-            for root in [
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("runtime"),
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("java"),
-                out.join("java"),
-            ] {
-                let mut stack = vec![root];
-                while let Some(dir) = stack.pop() {
-                    for entry in fs::read_dir(dir).unwrap() {
-                        let path = entry.unwrap().path();
-                        if path.is_dir() {
-                            stack.push(path);
-                        } else if path.extension().map(|e| e == "java").unwrap_or(false) {
-                            sources.push(path);
-                        }
-                    }
-                }
-            }
+            let project = Path::new(env!("OUT_DIR")).join("maven");
+            let cp_file = project.join("target/classpath.txt");
             let status =
-                Command::new("javac")
-                    .args(["-Xlint:all,-serial", "-Werror", "-d"])
-                    .arg(&classes)
-                    .args(&sources)
+                Command::new("mvn")
+                    .args(["-q", "-B", "compile", "dependency:build-classpath"])
+                    .arg(format!("-Dmdep.outputFile={}", cp_file.display()))
+                    .current_dir(&project)
                     .status()
                     .unwrap();
-            assert!(status.success(), "generated java failed to compile");
-            return Some(classes);
+            assert!(status.success(), "generated java failed to compile (see maven output above)");
+            let sep = if cfg!(windows) {
+                ";"
+            } else {
+                ":"
+            };
+            return Some(
+                format!("{}{}{}", project.join("target/classes").display(), sep, fs::read_to_string(cp_file).unwrap()),
+            );
         }).as_ref();
     }
 
-    fn round_trip(classes: &Path, binding: &str, json: &str) -> Result<serde_json::Value, String> {
+    fn round_trip(classpath: &str, binding: &str, json: &str) -> Result<serde_json::Value, String> {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let file =
             Path::new(
@@ -67,7 +51,14 @@ mod tests {
             ).join(format!("fixture_{}_{}.json", binding, COUNTER.fetch_add(1, Ordering::Relaxed)));
         fs::write(&file, json).unwrap();
         let output =
-            Command::new("java").arg("-cp").arg(classes).arg("Main").arg(binding).arg(&file).output().unwrap();
+            Command::new("java")
+                .arg("-cp")
+                .arg(classpath)
+                .arg("Main")
+                .arg(binding)
+                .arg(&file)
+                .output()
+                .unwrap();
         if !output.status.success() {
             return Err(String::from_utf8_lossy(&output.stderr).to_string());
         }
@@ -82,7 +73,7 @@ mod tests {
 
     #[test]
     fn valid_round_trips() {
-        let Some(classes) = classes() else {
+        let Some(classpath) = classpath() else {
             return;
         };
         let schema = schema();
@@ -111,6 +102,8 @@ mod tests {
             ("Event", join.as_str(), join.as_str()),
             ("Shape", r#"{"circle":{"radius":2}}"#, r#"{"circle":{"radius":2.0}}"#),
             ("Shape", r#"{"named":"box"}"#, r#"{"named":"box"}"#),
+            ("Foo", r#"{"bar_baz":{"x":1}}"#, r#"{"bar_baz":{"x":1}}"#),
+            ("FooBar", r#"{"baz":{"y":2}}"#, r#"{"baz":{"y":2}}"#),
         ] {
             schemask::validate(
                 &schema,
@@ -118,7 +111,7 @@ mod tests {
                 &serde_json::from_str(input).unwrap(),
             ).unwrap_or_else(|e| panic!("fixture for {} is not valid against the schema: {}", binding, e));
             let got =
-                round_trip(classes, binding, input).unwrap_or_else(|e| panic!("{} {}: {}", binding, input, e));
+                round_trip(classpath, binding, input).unwrap_or_else(|e| panic!("{} {}: {}", binding, input, e));
             assert_eq!(got, serde_json::from_str::<serde_json::Value>(expected).unwrap(), "{} {}", binding, input);
         }
         for (
@@ -131,14 +124,14 @@ mod tests {
             (r#"{"Moved":[0,1]}"#, r#"{"Moved":[0.0,1.0]}"#),
         ] {
             schemask::validate(&schema, Some("Event".to_string()), &serde_json::from_str(input).unwrap()).unwrap();
-            let got = round_trip(classes, "Event", input).unwrap_or_else(|e| panic!("Event {}: {}", input, e));
+            let got = round_trip(classpath, "Event", input).unwrap_or_else(|e| panic!("Event {}: {}", input, e));
             assert_eq!(got, serde_json::from_str::<serde_json::Value>(expected).unwrap(), "Event {}", input);
         }
     }
 
     #[test]
     fn invalid_rejected() {
-        let Some(classes) = classes() else {
+        let Some(classpath) = classpath() else {
             return;
         };
         let schema = schema();
@@ -173,6 +166,8 @@ mod tests {
             ("Event", r#""Ping" 1"#),
             ("Shape", r#""circle""#),
             ("Shape", r#"{"circle":{"radius":2,"x":1}}"#),
+            ("Foo", r#"{"bar_baz":{"y":2}}"#),
+            ("FooBar", r#"{"baz":{"x":1}}"#),
         ] {
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(input) {
                 assert!(
@@ -182,7 +177,7 @@ mod tests {
                     input
                 );
             }
-            assert!(round_trip(classes, binding, input).is_err(), "{} {} should have been rejected", binding, input);
+            assert!(round_trip(classpath, binding, input).is_err(), "{} {} should have been rejected", binding, input);
         }
     }
 }

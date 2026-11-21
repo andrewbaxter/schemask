@@ -2,7 +2,11 @@ use {
     crate::{
         Maskoid,
         MaskoidField,
-        v1::SchemaskV1,
+        v1::{
+            MaskoidElement,
+            MaskoidRef,
+            SchemaskV1,
+        },
     },
     heck::{
         ToSnakeCase,
@@ -22,9 +26,20 @@ use {
 
 struct CodeGen {
     extra_defs: Vec<TokenStream>,
+    used: std::collections::BTreeSet<String>,
 }
 
 impl CodeGen {
+    fn fresh(&mut self, hint: &str) -> String {
+        let mut name = hint.to_string();
+        let mut i = 2;
+        while !self.used.insert(name.clone()) {
+            name = format!("{}{}", hint, i);
+            i += 1;
+        }
+        return name;
+    }
+
     fn gen_record(
         &mut self,
         name: &str,
@@ -93,7 +108,7 @@ impl CodeGen {
             let vident = to_ident(&vname.to_upper_camel_case());
             let vrename = rename_attr(vname, &vident);
             let variant_doc = generate_docattr(variant.description.as_deref());
-            if matches!(variant.maskoid, Maskoid::Null) {
+            if matches!(variant.maskoid, Maskoid::Null(_)) {
                 return quote!{
                     #variant_doc #vrename #vident
                 };
@@ -116,36 +131,36 @@ impl CodeGen {
     /// nested Option(Option(...)), a wrapper struct is added to extra_defs.
     fn gen_type_expr(&mut self, maskoid: &Maskoid, hint: &str) -> TokenStream {
         return match maskoid {
-            Maskoid::Null => quote!{
+            Maskoid::Null(_) => quote!{
                 ()
             },
-            Maskoid::String | Maskoid::ConstString(_) => quote!{
+            Maskoid::String(_) | Maskoid::ConstString(_) => quote!{
                 String
             },
-            Maskoid::Bool => quote!{
+            Maskoid::Bool(_) => quote!{
                 bool
             },
-            Maskoid::Int => quote!{
+            Maskoid::Int(_) => quote!{
                 i64
             },
-            Maskoid::Float => quote!{
+            Maskoid::Float(_) => quote!{
                 f64
             },
-            Maskoid::Any => quote!{
+            Maskoid::Any(_) => quote!{
                 ::serde_json::Value
             },
-            Maskoid::Ref(name) => {
+            Maskoid::Ref(MaskoidRef { name, .. }) => {
                 let ident = format_ident!("{}", name);
                 quote!{
                     #ident
                 }
             },
-            Maskoid::Option(inner) => {
+            Maskoid::Option(MaskoidElement { element: inner, .. }) => {
                 if matches!(inner.as_ref(), Maskoid::Option(_)) {
                     // Nested options: the inner option is encoded as {"element": `<value>`}. Generate
                     // a wrapper struct so Option`<Wrapper>` correctly serialises to either null
                     // (None) or {"element": ...} (Some(Wrapper { element })).
-                    let wrapper_name = format!("{}Wrapper", hint);
+                    let wrapper_name = self.fresh(&format!("{}Wrapper", hint));
                     let wrapper_ident = format_ident!("{}", wrapper_name);
                     let element_ty = self.gen_type_expr(inner, &format!("{}Inner", hint));
                     self.extra_defs.push(quote!{
@@ -163,19 +178,19 @@ impl CodeGen {
                     }
                 }
             },
-            Maskoid::Set(inner) => {
+            Maskoid::Set(MaskoidElement { element: inner, .. }) => {
                 let inner_ty = self.gen_type_expr(inner, hint);
                 quote!{
                     Vec <#inner_ty >
                 }
             },
-            Maskoid::List(inner) => {
+            Maskoid::List(MaskoidElement { element: inner, .. }) => {
                 let inner_ty = self.gen_type_expr(inner, hint);
                 quote!{
                     Vec <#inner_ty >
                 }
             },
-            Maskoid::StringMap(inner) => {
+            Maskoid::StringMap(MaskoidElement { element: inner, .. }) => {
                 let inner_ty = self.gen_type_expr(inner, hint);
                 quote!{
                     std::collections::HashMap < String,
@@ -197,17 +212,19 @@ impl CodeGen {
                 }
             },
             Maskoid::Record(r) => {
-                let def = self.gen_record(hint, &r.fields, r.description.as_deref());
+                let name = self.fresh(hint);
+                let def = self.gen_record(&name, &r.fields, r.description.as_deref());
                 self.extra_defs.push(def);
-                let ident = format_ident!("{}", hint);
+                let ident = format_ident!("{}", name);
                 quote!{
                     #ident
                 }
             },
             Maskoid::TaggedUnion(u) => {
-                let def = self.gen_tagged_union(hint, &u.variants, u.description.as_deref());
+                let name = self.fresh(hint);
+                let def = self.gen_tagged_union(&name, &u.variants, u.description.as_deref());
                 self.extra_defs.push(def);
-                let ident = format_ident!("{}", hint);
+                let ident = format_ident!("{}", name);
                 quote!{
                     #ident
                 }
@@ -235,7 +252,10 @@ pub fn generate_rust(schema: &SchemaskV1) -> String {
 }
 
 pub fn generate_rust_tokens(schema: &SchemaskV1) -> TokenStream {
-    let mut codegen = CodeGen { extra_defs: vec![] };
+    let mut codegen = CodeGen {
+        extra_defs: vec![],
+        used: schema.bindings.keys().cloned().collect(),
+    };
     let mut sorted_bindings: Vec<_> = schema.bindings.iter().collect();
     sorted_bindings.sort_by_key(|(k, _)| k.as_str());
     let binding_defs: Vec<TokenStream> = sorted_bindings.iter().map(|(name, maskoid)| {
@@ -281,4 +301,33 @@ fn to_ident(cased: &str) -> Ident {
         return Ident::new_raw(cased, Span::call_site());
     }
     return Ident::new(&format!("_{}", cased), Span::call_site());
+}
+
+#[cfg(test)]
+mod tests {
+    use {
+        super::*,
+        crate::MaskoidField,
+        std::collections::BTreeMap,
+    };
+
+    #[test]
+    fn helper_names_do_not_collide() {
+        let rec = |k: &str| Maskoid::record({
+            let mut f = BTreeMap::new();
+            f.insert(k.to_string(), MaskoidField::new(Maskoid::record(BTreeMap::new())));
+            f
+        });
+        let mut bindings = BTreeMap::new();
+        bindings.insert("Foo".to_string(), rec("bar_baz"));
+        bindings.insert("FooBar".to_string(), rec("baz"));
+        bindings.insert("FooBarBaz2".to_string(), Maskoid::int());
+        let out = generate_rust(&SchemaskV1 {
+            bindings: bindings,
+            default: None,
+        });
+        assert_eq!(out.matches("pub struct FooBarBaz ").count(), 1, "{}", out);
+        assert_eq!(out.matches("pub struct FooBarBaz3 ").count(), 1, "{}", out);
+        assert!(out.contains("pub type FooBarBaz2 = i64;"), "{}", out);
+    }
 }

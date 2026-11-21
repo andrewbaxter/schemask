@@ -28,7 +28,12 @@ fn main() {
         bindings.insert("Player".to_string(), Maskoid::record({
             let mut f = BTreeMap::new();
             f.insert("name".to_string(), MaskoidField::new(Maskoid::ref_("Label")));
-            f.insert("score".to_string(), MaskoidField::new(Maskoid::option(Maskoid::int())));
+            f.insert(
+                "score".to_string(),
+                MaskoidField::new(Maskoid::option(Maskoid::int()).with_metadata(serde_json::json!({
+                    "for": "external tooling"
+                }))),
+            );
             f.insert("tags".to_string(), MaskoidField::new(Maskoid::ref_("Tags")));
             f
         }));
@@ -37,7 +42,9 @@ fn main() {
             v.insert("Join".to_string(), MaskoidField::new(Maskoid::ref_("Player")));
             v.insert("Leave".to_string(), MaskoidField::new(Maskoid::ref_("Label")));
             v
-        }));
+        }).with_metadata(serde_json::json!({
+            "for": "external tooling"
+        })));
         return schemask::latest::SchemaskV1 {
             bindings: bindings,
             default: Some("Player".to_string()),

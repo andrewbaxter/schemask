@@ -11,7 +11,6 @@ use {
     quote::{
         format_ident,
         quote,
-        quote_spanned,
     },
     syn::{
         Attribute,
@@ -49,27 +48,66 @@ pub fn derive_schematize(input: TokenStream) -> TokenStream {
                 );
             }
         }
-        if let Data::Enum(e) = &input.data {
-            for variant in &e.variants {
-                if serde_has(&variant.attrs, "untagged") {
-                    return Some(
-                        syn::Error::new_spanned(
-                            &variant.ident,
-                            "Maskoidy does not support #[serde(untagged)]: schemask unions are always externally tagged",
-                        ).to_compile_error(),
-                    );
-                }
+        for key in ["from", "into", "try_from", "remote"] {
+            if serde_has(&input.attrs, key) {
+                return Some(
+                    syn::Error::new_spanned(
+                        &input.ident,
+                        format!(
+                            "Maskoidy does not support #[serde({})]: the serialized shape is not derivable from the fields",
+                            key
+                        ),
+                    ).to_compile_error(),
+                );
             }
+        }
+        match &input.data {
+            Data::Struct(s) => {
+                for field in &s.fields {
+                    if let Some(err) = check_field_attrs(field) {
+                        return Some(err);
+                    }
+                }
+            },
+            Data::Enum(e) => {
+                for variant in &e.variants {
+                    if serde_has(&variant.attrs, "untagged") {
+                        return Some(
+                            syn::Error::new_spanned(
+                                &variant.ident,
+                                "Maskoidy does not support #[serde(untagged)]: schemask unions are always externally tagged",
+                            ).to_compile_error(),
+                        );
+                    }
+                    for key in ["with", "serialize_with", "deserialize_with"] {
+                        if serde_has(&variant.attrs, key) {
+                            return Some(
+                                syn::Error::new_spanned(
+                                    &variant.ident,
+                                    format!(
+                                        "Maskoidy does not support #[serde({})]: the serialized shape is not derivable from the variant",
+                                        key
+                                    ),
+                                ).to_compile_error(),
+                            );
+                        }
+                    }
+                    for field in &variant.fields {
+                        if let Some(err) = check_field_attrs(field) {
+                            return Some(err);
+                        }
+                    }
+                }
+            },
+            Data::Union(_) => { },
         }
         return None;
     })() {
         return err.into();
     }
     let name = &input.ident;
-    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
     let type_doc = extract_doc(&input.attrs);
     let name_str = name.to_string();
-    let span = name.span();
     let schemask_path = (|| -> TokenStream2 {
         for name in ["schemask", "schemask_core"] {
             match crate_name(name) {
@@ -93,6 +131,16 @@ pub fn derive_schematize(input: TokenStream) -> TokenStream {
         Data::Struct(s) => (|| -> TokenStream2 {
             let fields = &s.fields;
             let schemask_path = &schemask_path;
+            if serde_has(&input.attrs, "transparent") {
+                let kept: Vec<_> = fields.iter().filter(|f| !is_skipped(f)).collect();
+                if kept.len() != 1 {
+                    return syn::Error::new_spanned(
+                        &input.ident,
+                        "#[serde(transparent)] requires exactly one non-skipped field",
+                    ).to_compile_error();
+                }
+                return type_to_maskoid(&kept[0].ty, schemask_path);
+            }
             let base = match fields {
                 Fields::Unit => quote!{
                     #schemask_path:: Maskoid:: null()
@@ -112,7 +160,7 @@ pub fn derive_schematize(input: TokenStream) -> TokenStream {
                     }
                 },
                 Fields::Named(f) => {
-                    let entries: Vec<TokenStream2> = f.named.iter().map(|field| {
+                    let entries: Vec<TokenStream2> = f.named.iter().filter(|f| !is_skipped(f)).map(|field| {
                         let field_name = field_key(field, rename_rule(&input.attrs, "rename_all"));
                         let m = type_to_maskoid(&field.ty, schemask_path);
                         let entry = apply_desc(quote!{
@@ -134,60 +182,65 @@ pub fn derive_schematize(input: TokenStream) -> TokenStream {
         })(),
         Data::Enum(e) => (|| -> TokenStream2 {
             let schemask_path = &schemask_path;
-            let entries: Vec<TokenStream2> = e.variants.iter().map(|variant| {
-                let variant_name =
-                    serde_value(
-                        &variant.attrs,
-                        "rename",
-                    ).unwrap_or_else(
-                        || rename_rule(&input.attrs, "rename_all").apply_to_variant(&unraw(&variant.ident)),
-                    );
-                let field_rule = match rename_rule(&variant.attrs, "rename_all") {
-                    RenameRule::None => rename_rule(&input.attrs, "rename_all_fields"),
-                    r => r,
-                };
-                let maskoid = match &variant.fields {
-                    Fields::Unit => quote!{
-                        #schemask_path:: Maskoid:: null()
-                    },
-                    Fields::Unnamed(f) if f.unnamed.len() == 1 => type_to_maskoid(&f.unnamed[0].ty, schemask_path),
-                    Fields::Unnamed(f) => {
-                        let elems: Vec<_> = f.unnamed.iter().map(|f| {
-                            let m = type_to_maskoid(&f.ty, schemask_path);
-                            return apply_desc(quote!{
-                                #schemask_path:: MaskoidField:: new(#m)
-                            }, extract_doc(&f.attrs).as_deref());
-                        }).collect();
-                        quote!{
-                            #schemask_path:: Maskoid:: tuple(vec![#(#elems), *])
-                        }
-                    },
-                    Fields::Named(f) => {
-                        let field_entries: Vec<TokenStream2> = f.named.iter().map(|field| {
-                            let name = field_key(field, field_rule);
-                            let m = type_to_maskoid(&field.ty, schemask_path);
-                            let entry = apply_desc(quote!{
-                                #schemask_path:: MaskoidField:: new(#m)
-                            }, extract_doc(&field.attrs).as_deref());
+            let entries: Vec<TokenStream2> =
+                e.variants.iter().filter(|v| !serde_has(&v.attrs, "skip")).map(|variant| {
+                    let variant_name =
+                        serde_value(
+                            &variant.attrs,
+                            "rename",
+                        ).unwrap_or_else(
+                            || rename_rule(&input.attrs, "rename_all").apply_to_variant(&unraw(&variant.ident)),
+                        );
+                    let field_rule = match rename_rule(&variant.attrs, "rename_all") {
+                        RenameRule::None => rename_rule(&input.attrs, "rename_all_fields"),
+                        r => r,
+                    };
+                    let maskoid = match &variant.fields {
+                        Fields::Unit => quote!{
+                            #schemask_path:: Maskoid:: null()
+                        },
+                        Fields::Unnamed(f) if f.unnamed.len() == 1 => type_to_maskoid(
+                            &f.unnamed[0].ty,
+                            schemask_path,
+                        ),
+                        Fields::Unnamed(f) => {
+                            let elems: Vec<_> = f.unnamed.iter().map(|f| {
+                                let m = type_to_maskoid(&f.ty, schemask_path);
+                                return apply_desc(quote!{
+                                    #schemask_path:: MaskoidField:: new(#m)
+                                }, extract_doc(&f.attrs).as_deref());
+                            }).collect();
                             quote!{
-                                map.insert(#name.to_string(), #entry);
+                                #schemask_path:: Maskoid:: tuple(vec![#(#elems), *])
                             }
-                        }).collect();
-                        quote!{
-                            {
-                                let mut map = ::std::collections::BTreeMap::new();
-                                #(#field_entries) * #schemask_path:: Maskoid:: record(map)
+                        },
+                        Fields::Named(f) => {
+                            let field_entries: Vec<TokenStream2> =
+                                f.named.iter().filter(|f| !is_skipped(f)).map(|field| {
+                                    let name = field_key(field, field_rule);
+                                    let m = type_to_maskoid(&field.ty, schemask_path);
+                                    let entry = apply_desc(quote!{
+                                        #schemask_path:: MaskoidField:: new(#m)
+                                    }, extract_doc(&field.attrs).as_deref());
+                                    quote!{
+                                        map.insert(#name.to_string(), #entry);
+                                    }
+                                }).collect();
+                            quote!{
+                                {
+                                    let mut map = ::std::collections::BTreeMap::new();
+                                    #(#field_entries) * #schemask_path:: Maskoid:: record(map)
+                                }
                             }
-                        }
-                    },
-                };
-                let variant_entry = apply_desc(quote!{
-                    #schemask_path:: MaskoidField:: new(#maskoid)
-                }, extract_doc(&variant.attrs).as_deref());
-                quote!{
-                    variants.insert(#variant_name.to_string(), #variant_entry);
-                }
-            }).collect();
+                        },
+                    };
+                    let variant_entry = apply_desc(quote!{
+                        #schemask_path:: MaskoidField:: new(#maskoid)
+                    }, extract_doc(&variant.attrs).as_deref());
+                    quote!{
+                        variants.insert(#variant_name.to_string(), #variant_entry);
+                    }
+                }).collect();
             return apply_desc(quote!{
                 {
                     let mut variants = ::std::collections::BTreeMap::new();
@@ -201,13 +254,15 @@ pub fn derive_schematize(input: TokenStream) -> TokenStream {
                 .into();
         },
     };
-    let schema_id_expr = quote_spanned!{
-        span => :: std:: concat !(::std::file!(), ":", ::std::line!())
-    };
+    let mut generics = input.generics.clone();
+    for param in generics.type_params_mut() {
+        param.bounds.push(syn::parse_quote!(#schemask_path:: Maskoidy));
+    }
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
     return quote!{
         impl #impl_generics #schemask_path:: Maskoidy for #name #ty_generics #where_clause {
             fn schema_id() -> &'static str {
-                #schema_id_expr
+                ::std::any::type_name::<Self>()
             }
             fn schema_name() -> &'static str {
                 #name_str
@@ -226,11 +281,110 @@ pub fn derive_schematize(input: TokenStream) -> TokenStream {
                 let __result = {
                     #inner_expr
                 };
+                if bindings.contains_key(__name) {
+                    panic!(
+                        "schemask: two distinct types are both named '{}' ({} and another); bindings are keyed by bare type name, so rename one or wrap it in a newtype",
+                        __name,
+                        __id
+                    );
+                }
                 bindings.insert(__name.to_string(), __result);
                 return #schemask_path:: Maskoid:: ref_(__name);
             }
         }
     }.into();
+}
+
+fn check_field_attrs(field: &syn::Field) -> Option<TokenStream2> {
+    if is_skipped(field) {
+        return None;
+    }
+    let target: &dyn quote::ToTokens = match &field.ident {
+        Some(i) => i,
+        None => &field.ty,
+    };
+    for key in ["skip_serializing", "skip_deserializing", "flatten", "with", "serialize_with", "deserialize_with"] {
+        if serde_has(&field.attrs, key) {
+            return Some(
+                syn::Error::new_spanned(
+                    target,
+                    format!(
+                        "Maskoidy does not support #[serde({})]: the serialized shape is not derivable from the field",
+                        key
+                    ),
+                ).to_compile_error(),
+            );
+        }
+    }
+    let is_option = match &field.ty {
+        Type::Path(p) => p.path.segments.last().map(|s| s.ident == "Option").unwrap_or(false),
+        _ => false,
+    };
+    if serde_has(&field.attrs, "skip_serializing_if") && !is_option {
+        return Some(
+            syn::Error::new_spanned(
+                target,
+                "Maskoidy only supports #[serde(skip_serializing_if)] on Option fields, which may be omitted; other fields are required",
+            ).to_compile_error(),
+        );
+    }
+    return check_type(&field.ty, false).map(|e| e.to_compile_error());
+}
+
+fn check_type(ty: &Type, in_option: bool) -> Option<syn::Error> {
+    let Type::Path(p) = ty else {
+        return match ty {
+            Type::Reference(r) => check_type(&r.elem, in_option),
+            Type::Array(a) => check_type(&a.elem, false),
+            Type::Slice(s) => check_type(&s.elem, false),
+            Type::Paren(p) => check_type(&p.elem, in_option),
+            Type::Group(g) => check_type(&g.elem, in_option),
+            Type::Tuple(t) => t.elems.iter().find_map(|e| check_type(e, false)),
+            _ => None,
+        };
+    };
+    let Some(last) = p.path.segments.last() else {
+        return None;
+    };
+    let name = last.ident.to_string();
+    let is_option = name == "Option";
+    let is_soption = name == "SOption";
+    if is_option && in_option {
+        return Some(
+            syn::Error::new_spanned(
+                ty,
+                "Option<Option<T>> is ambiguous in serde (None and Some(None) both serialize as null); use Option<SOption<T>> instead",
+            ),
+        );
+    }
+    if is_soption && !in_option {
+        return Some(
+            syn::Error::new_spanned(
+                ty,
+                "SOption<T> only has the right shape directly inside an Option (or another SOption); write Option<SOption<T>>",
+            ),
+        );
+    }
+    let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
+        return None;
+    };
+    let transparent = matches!(name.as_str(), "Box" | "Rc" | "Arc" | "Cow");
+    for arg in &args.args {
+        if let syn::GenericArgument::Type(t) = arg {
+            if let Some(e) = check_type(t, if transparent {
+                in_option
+            } else {
+                is_option || is_soption
+            }) {
+                return Some(e);
+            }
+        }
+    }
+    return None;
+}
+
+fn is_skipped(field: &syn::Field) -> bool {
+    return serde_has(&field.attrs, "skip");
 }
 
 fn extract_doc(attrs: &[Attribute]) -> Option<String> {

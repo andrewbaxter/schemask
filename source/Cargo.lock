@@ -817,6 +817,7 @@ name = "test_gen_typescript"
 version = "0.1.6"
 dependencies = [
  "schemask",
+ "serde_json",
 ]
 
 [[package]]
