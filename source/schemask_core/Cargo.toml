@@ -1,6 +1,6 @@
 [package]
 name = "schemask_core"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 rust-version = "1.88"
 license = "ISC"
@@ -9,7 +9,7 @@ readme = "../../readme.md"
 description = "Simple but powerful data schemas (core model and generators)"
 
 [dependencies]
-schemask_derive = { version = "0.2.0", path = "../schemask_derive" }
+schemask_derive = { version = "0.2.1", path = "../schemask_derive" }
 genemichaels-lib = "0.8"
 heck = "0.5"
 proc-macro2 = "1"

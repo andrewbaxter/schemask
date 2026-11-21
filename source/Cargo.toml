@@ -3,7 +3,7 @@ members = ["schemask_core", "schemask_derive", "schemask_from", "test_gen_rust",
 
 [package]
 name = "schemask"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 rust-version = "1.88"
 license = "ISC"
@@ -16,9 +16,9 @@ name = "schemask"
 path = "src/bin/main.rs"
 
 [dependencies]
-schemask_core = { version = "0.2.0", path = "schemask_core" }
-schemask_derive = { version = "0.2.0", path = "schemask_derive" }
-schemask_from = { version = "0.2.0", path = "schemask_from" }
+schemask_core = { version = "0.2.1", path = "schemask_core" }
+schemask_derive = { version = "0.2.1", path = "schemask_derive" }
+schemask_from = { version = "0.2.1", path = "schemask_from" }
 aargvark = { version = "0.9", features = ["serde_json"] }
 flowcontrol = "0.2"
 loga = "0.5"
