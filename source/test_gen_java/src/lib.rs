@@ -90,8 +90,8 @@ mod tests {
             ("Unique", r#"[3,1,2]"#, r#"[3,1,2]"#),
             ("Meta", r#"{"env":"prod","region":"eu"}"#, r#"{"env":"prod","region":"eu"}"#),
             ("Maybe", "null", "null"),
-            ("Maybe", r#"{"element":null}"#, r#"{"element":null}"#),
-            ("Maybe", r#"{"element":7}"#, r#"{"element":7}"#),
+            ("Maybe", r#"{"value":null}"#, r#"{"value":null}"#),
+            ("Maybe", r#"{"value":7}"#, r#"{"value":7}"#),
             ("Coords", "[1.5,2]", "[1.5,2.0]"),
             ("Account", account, account),
             (
@@ -144,7 +144,7 @@ mod tests {
             ("Unique", "[1,1]"),
             ("Meta", r#"{"k":1}"#),
             ("Maybe", "7"),
-            ("Maybe", r#"{"element":7,"x":1}"#),
+            ("Maybe", r#"{"value":7,"x":1}"#),
             ("Coords", "[1.0]"),
             (
                 "Account",

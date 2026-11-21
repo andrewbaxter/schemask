@@ -161,14 +161,14 @@ mod tests {
         let m = Maskoid::option(Maskoid::option(Maskoid::string()));
         pass(m.clone(), json!(null));
         pass(m.clone(), json!({
-            "element": null
+            "value": null
         }));
         pass(m.clone(), json!({
-            "element": "hello"
+            "value": "hello"
         }));
         fail(m.clone(), json!("hello"), &[]);
         fail(m.clone(), json!({
-            "element": "hello",
+            "value": "hello",
             "extra": "world"
         }), &[]);
         fail(m.clone(), json!({
@@ -470,18 +470,18 @@ impl<T> From<SOption<T>> for Option<T> {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SOptionRepr<T> {
-    element: Option<T>,
+    value: Option<T>,
 }
 
 impl<T: Serialize> Serialize for SOption<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        return SOptionRepr { element: self.as_option() }.serialize(serializer);
+        return SOptionRepr { value: self.as_option() }.serialize(serializer);
     }
 }
 
 impl<'de, T: Deserialize<'de>> Deserialize<'de> for SOption<T> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        return Ok(SOption::from(SOptionRepr::<T>::deserialize(deserializer)?.element));
+        return Ok(SOption::from(SOptionRepr::<T>::deserialize(deserializer)?.value));
     }
 }
 
@@ -489,7 +489,7 @@ impl<T: Maskoidy> Maskoidy for SOption<T> {
     fn maskoid(seen: &mut HashSet<&'static str>, bindings: &mut BTreeMap<String, Maskoid>) -> Maskoid {
         if T::is_plain_option() {
             panic!(
-                "SOption<Option<T>> is ambiguous in serde (SOption::None and SOption::Some(None) both serialize as {{\"element\": null}}); use SOption<SOption<T>> instead"
+                "SOption<Option<T>> is ambiguous in serde (SOption::None and SOption::Some(None) both serialize as {{\"value\": null}}); use SOption<SOption<T>> instead"
             );
         }
         return Maskoid::option(T::maskoid(seen, bindings));
@@ -1014,16 +1014,16 @@ pub fn match_maskoid(
                 // Nested options are encoded as {"element": ...} per spec
                 if matches!(inner.as_ref(), Maskoid::Option(_)) {
                     match data.as_object() {
-                        Some(obj) if obj.len() == 1 && obj.contains_key("element") => {
-                            path.push(PathSegment::Key("element".to_string()));
-                            match_maskoid(schema, inner, obj.get("element").unwrap(), path, errors);
+                        Some(obj) if obj.len() == 1 && obj.contains_key("value") => {
+                            path.push(PathSegment::Key("value".to_string()));
+                            match_maskoid(schema, inner, obj.get("value").unwrap(), path, errors);
                             path.pop();
                         },
                         Some(obj) => {
                             errors.push(ValidationError {
                                 path: path.clone(),
                                 message: format!(
-                                    "Expected nested option as {{\"element\": ...}}, got object with {} keys",
+                                    "Expected nested option as {{\"value\": ...}}, got object with {} keys",
                                     obj.len()
                                 ),
                             });
@@ -1032,7 +1032,7 @@ pub fn match_maskoid(
                             errors.push(ValidationError {
                                 path: path.clone(),
                                 message: format!(
-                                    "Expected nested option as {{\"element\": ...}}, got {}",
+                                    "Expected nested option as {{\"value\": ...}}, got {}",
                                     type_name(data)
                                 ),
                             });

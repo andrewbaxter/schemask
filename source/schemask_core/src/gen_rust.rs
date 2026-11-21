@@ -165,7 +165,7 @@ impl CodeGen {
                     let element_ty = self.gen_type_expr(inner, &format!("{}Inner", hint));
                     self.extra_defs.push(quote!{
                         #[derive(::serde::Serialize, ::serde::Deserialize)] pub struct #wrapper_ident {
-                            pub element: #element_ty,
+                            pub value: #element_ty,
                         }
                     });
                     quote!{

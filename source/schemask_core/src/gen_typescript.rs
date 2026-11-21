@@ -59,7 +59,7 @@ fn ts_type(maskoid: &Maskoid) -> String {
         Maskoid::Option(MaskoidElement { element: inner, .. }) => {
             if matches!(inner.as_ref(), Maskoid::Option(_)) {
                 // Nested option: inner encoded as {"element": `<value>`}
-                format!("{{ element: {} }} | null", ts_type(inner))
+                format!("{{ value: {} }} | null", ts_type(inner))
             } else {
                 format!("{} | null", ts_type(inner))
             }
@@ -99,7 +99,7 @@ fn ts_type(maskoid: &Maskoid) -> String {
                 return match &field.maskoid {
                     Maskoid::Option(MaskoidElement { element: inner, .. }) => {
                         if matches!(inner.as_ref(), Maskoid::Option(_)) {
-                            format!("{}  {}?: {{ element: {} }} | null", doc, key, ts_type(inner))
+                            format!("{}  {}?: {{ value: {} }} | null", doc, key, ts_type(inner))
                         } else {
                             format!("{}  {}?: {} | null", doc, key, ts_type(inner))
                         }

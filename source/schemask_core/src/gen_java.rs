@@ -235,22 +235,22 @@ impl<'a> CodeGen<'a> {
                 let element_ty = self.type_of(inner, &format!("{}Inner", hint), true);
                 self.files.push(JavaFile {
                     path: self.file_path(&wrapper),
-                    source: format!("{}public record {}({} element) {{}}\n", self.header(), wrapper, element_ty),
+                    source: format!("{}public record {}({} value) {{}}\n", self.header(), wrapper, element_ty),
                 });
                 let enc_out = self.tmp("j");
-                let enc = self.encode(inner, &format!("{}Inner", hint), "value.element()", &enc_out);
+                let enc = self.encode(inner, &format!("{}Inner", hint), "value.value()", &enc_out);
                 let dec_out = self.tmp("v");
                 let dec =
                     self.decode(
                         inner,
                         &format!("{}Inner", hint),
-                        "value.get(\"element\")",
-                        &field_path("path", "element"),
+                        "value.get(\"value\")",
+                        &field_path("path", "value"),
                         &dec_out,
                     );
                 let source =
                     format!(
-                        "{header}public final class {w}Codec {{\n    private {w}Codec() {{}}\n\n    public static {jn} toValue({w} value) {{\n{enc}        {on} __o = {f}.objectNode();\n        __o.set(\"element\", {enc_out});\n        return __o;\n    }}\n\n    public static {w} fromValue({jn} value) {{\n        return fromValue(value, \"$\");\n    }}\n\n    public static {w} fromValue({jn} value, String path) {{\n        if (!value.isObject() || value.size() != 1 || !value.has(\"element\")) {{\n            {exc}\n        }}\n{dec}        return new {w}({dec_out});\n    }}\n}}\n",
+                        "{header}public final class {w}Codec {{\n    private {w}Codec() {{}}\n\n    public static {jn} toValue({w} value) {{\n{enc}        {on} __o = {f}.objectNode();\n        __o.set(\"value\", {enc_out});\n        return __o;\n    }}\n\n    public static {w} fromValue({jn} value) {{\n        return fromValue(value, \"$\");\n    }}\n\n    public static {w} fromValue({jn} value, String path) {{\n        if (!value.isObject() || value.size() != 1 || !value.has(\"value\")) {{\n            {exc}\n        }}\n{dec}        return new {w}({dec_out});\n    }}\n}}\n",
                         header = self.header(),
                         w = wrapper,
                         jn = JSON_NODE,
@@ -258,7 +258,7 @@ impl<'a> CodeGen<'a> {
                         f = NODE_FACTORY,
                         enc = indent(&enc, 2),
                         enc_out = enc_out,
-                        exc = exception("\"Expected an object with exactly the key 'element'\"", "path"),
+                        exc = exception("\"Expected an object with exactly the key 'value'\"", "path"),
                         dec = indent(&dec, 2),
                         dec_out = dec_out,
                     );

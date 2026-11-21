@@ -29,9 +29,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: DeterminateSystems/nix-installer-action@main
       - name: Build rust-ai-lint
+        # The linter runs inside rustc and uses its unstable internal APIs, so it only
+        # builds with the compiler it was written against. Its default.nix uses the
+        # ambient <nixpkgs> rustc, so pin both the linter commit and nixpkgs. Bump them
+        # together.
+        env:
+          LINT_REV: e7e3958dbc72a992e73950d8b82d7492e16ae2fe
+          NIXPKGS_REV: f3a73bcf5d1c5b75a66cf35a48957e30d41d647a
         run: |
-          git clone --depth 1 https://github.com/andrewbaxter/rust-ai-lint "$RUNNER_TEMP/rust-ai-lint"
-          nix-build --out-link "$RUNNER_TEMP/rust-ai-lint-result" "$RUNNER_TEMP/rust-ai-lint"
+          git clone https://github.com/andrewbaxter/rust-ai-lint "$RUNNER_TEMP/rust-ai-lint"
+          git -C "$RUNNER_TEMP/rust-ai-lint" checkout --detach "$LINT_REV"
+          nix-build \
+            -I nixpkgs="https://github.com/NixOS/nixpkgs/archive/$NIXPKGS_REV.tar.gz" \
+            --out-link "$RUNNER_TEMP/rust-ai-lint-result" \
+            "$RUNNER_TEMP/rust-ai-lint"
       - name: Lint
         run: |
           # The linter rewrites files in place and exits non-zero if problems remain, so

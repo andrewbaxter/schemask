@@ -376,11 +376,11 @@ fn soption_matches_nested_option_encoding() {
         "v": null
     })), (Nested { v: Some(SOption::None) }, json!({
         "v": {
-            "element": null
+            "value": null
         }
     })), (Nested { v: Some(SOption::Some(5)) }, json!({
         "v": {
-            "element": 5
+            "value": 5
         }
     }))] {
         let encoded = serde_json::to_value(&value).unwrap();
@@ -391,7 +391,7 @@ fn soption_matches_nested_option_encoding() {
     }
     assert!(serde_json::from_value::<Nested>(json!({
         "v": {
-            "element": 1,
+            "value": 1,
             "x": 2
         }
     })).is_err());
