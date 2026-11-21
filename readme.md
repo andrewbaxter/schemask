@@ -47,13 +47,15 @@ Schemask defines the following types and examples of their matching JSON:
 - Int: `7` (rejects floats)
 - Float: `1.34` (any number)
 - Ref (`binding`): Anything - this matches against the type in the binding with the specified binding name
-- Option (TYPE): Matches `TYPE` or `null`. If options are nested, the inner option matches `{"element": TYPE | null}` instead.
+- Option (TYPE): Matches `TYPE` or `null`. If options are nested, the inner option matches `{"value": TYPE | null}` instead.
 - Set (TYPE): Matches an array, like `["a", "b", "c"]` if TYPE is `string`. Duplicates are rejected. Order doesn't matter.
 - List (TYPE): Matches an array, like `["a", "b", "c"]` if TYPE is `string`. Order is significant.
 - String map (TYPE): Matches an object, like `{k: v}` where `v` matches TYPE.
 - Tuple `[TYPE1, TYPE2, ...]`: Matches an array where each element can have a different type specification (like `["a", 4]`)
 - Tagged union `{KEY1: TYPE1 | KEY2: TYPE2}`: Matches an object that contains exactly one of the listed `KEY` `VALUE` pairs. A variant whose type is null also matches the bare string `"KEY"`, which is how such a variant is written.
 - Record `{KEY1: TYPE1, KEY2: TYPE2}`: Matches an object that has every listed key and a matching value, and no others. A key whose type is an option may be omitted instead of being set to null.
+
+The schema can also include `metadata` for each - arbitrary additional information associated with values and fields. The metadata is not used for parsing/validation, but it may help guide code generation.
 
 For perhaps slightly more rigor, there's a json encoding of a schemask specification for schemask, available by running the cli: `schemask schemask-schema`.
 
